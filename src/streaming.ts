@@ -198,7 +198,15 @@ export class TelegramStreamSink implements StreamSink {
       this.editTimer = null;
     }
     if (this.messageId == null || this.aborted) return;
-    const text = this.draft.length === 0 ? '…' : this.draft;
+    let text = this.draft.length === 0 ? '…' : this.draft;
+    // Telegram hard-caps editMessageText at 4096 chars. If the draft has
+    // grown past that, truncate to the tail so the user still sees the
+    // most recent output live. The full text is sent as split messages
+    // after the turn completes.
+    const TRUNCATE_HINT = '…';
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      text = TRUNCATE_HINT + text.slice(-(MAX_MESSAGE_LENGTH - TRUNCATE_HINT.length));
+    }
     this.lastEditAt = Date.now();
     try {
       await this.bot.api.editMessageText(this.chatId, this.messageId, text);
@@ -213,4 +221,7 @@ export class TelegramStreamSink implements StreamSink {
     }
   }
 }
+
+/** Telegram hard limit for message text (edit or send). */
+export const MAX_MESSAGE_LENGTH = 4096;
 

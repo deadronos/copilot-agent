@@ -100,6 +100,24 @@ This sink edits **one** Telegram message in place as the agent streams. Strategy
 
 The sink never throws — streaming errors are logged and swallowed so they cannot crash the agent loop.
 
+### Handling long content (4096-character limit)
+
+Telegram caps both `editMessageText` and `sendMessage` at 4096 characters. During a long review session or multi-file analysis the draft can exceed this limit quickly. `TelegramStreamSink.flushNow()` detects this and truncates the text to the last ~4093 characters prefixed with `…` so the live edit never fails. The full accumulated draft is preserved in memory.
+
+After `sendAndWait` resolves, the message handler in `src/telegram.ts` computes the final content:
+
+```typescript
+const finalContent =
+  response?.content && response.content.length > 0 ? response.content : draft;
+```
+
+If `finalContent.length > 4096`, the handler:
+1. Deletes the live-draft message (so the user isn't left with a truncated preview).
+2. Splits the full text into 4096-character chunks using the existing `splitMessage` helper.
+3. Sends each chunk as a new plain-text message via `ctx.reply`.
+
+This ensures the user sees both live progress during streaming and the complete, unsplit response at the end.
+
 ### Fallback when streaming events are incomplete
 
 The message handler in `src/telegram.ts` does not rely solely on streaming events. After `enqueueMessage` resolves, it calls `stream.flushNow()` and then checks the draft. If the draft is empty but `sendAndWait` returned a `response.content`, the handler edits the Telegram message with that content directly. This guards against two failure modes:

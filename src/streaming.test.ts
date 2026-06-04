@@ -192,5 +192,23 @@ describe('TelegramStreamSink', () => {
     vi.advanceTimersByTime(750);
     await expect(vi.runAllTimersAsync()).resolves.not.toThrow();
   });
+
+  it('truncates draft to MAX_MESSAGE_LENGTH so editMessageText never fails on length', async () => {
+    const editMessageText = vi.fn().mockResolvedValue(true);
+    const bot = makeFakeBot({ editMessageText });
+    const sink = new TelegramStreamSink(bot, 123, 99);
+    await sink.start();
+
+    const longText = 'a'.repeat(5000);
+    sink.onAssistantDelta!('m1', longText);
+    vi.advanceTimersByTime(750);
+    await vi.runAllTimersAsync();
+
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    const sentText = editMessageText.mock.calls[0][2] as string;
+    expect(sentText.length).toBeLessThanOrEqual(4096);
+    expect(sentText.startsWith('…')).toBe(true);
+    expect(sentText.endsWith('a')).toBe(true);
+  });
 });
 

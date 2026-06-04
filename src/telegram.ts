@@ -5,13 +5,10 @@ import { getChildLogger } from './logger.js';
 import type { AppConfig, PermissionDecision } from './types.js';
 import { type SessionManager } from './sessions.js';
 import { formatPermissionMessage } from './permissions.js';
-import { TelegramStreamSink } from './streaming.js';
+import { TelegramStreamSink, MAX_MESSAGE_LENGTH } from './streaming.js';
 import type { AgentDefinition } from './types.js';
 
 const log = getChildLogger('telegram');
-
-// Telegram message length limit
-const MAX_MESSAGE_LENGTH = 4096;
 
 interface PersistedPendingPermission {
   requestId: string;
@@ -186,24 +183,41 @@ export class TelegramBot {
         await stream.flushNow();
 
         const draft = stream.getDraft();
-        if (response?.content) {
+        const finalContent =
+          response?.content && response.content.length > 0 ? response.content : draft;
+        const msgId = stream.messageIdForEdit();
+
+        if (finalContent.length > MAX_MESSAGE_LENGTH) {
+          // The output exceeds Telegram's single-message limit. Delete the
+          // live-draft message and send the full text as properly split
+          // chunks so the user gets the complete response.
+          if (msgId != null) {
+            try {
+              await this.bot.api.deleteMessage(chatId, msgId);
+            } catch {
+              // Ignore — the draft message may have already been deleted.
+            }
+          }
+          const chunks = splitMessage(finalContent, MAX_MESSAGE_LENGTH);
+          for (const chunk of chunks) {
+            await ctx.reply(chunk);
+          }
+        } else if (response?.content && draft.length === 0) {
           // If the streaming events never populated the draft (or it was
           // wiped by an empty assistant.message completion signal), fall
           // back to the sendAndWait response so the user isn't left
           // staring at a "…" message.
-          const msgId = stream.messageIdForEdit();
-          if (msgId != null && draft.length === 0) {
+          if (msgId != null) {
             try {
               await this.bot.api.editMessageText(chatId, msgId, response.content);
             } catch {
               // Ignore — the stream sink already swallows edit errors.
             }
           }
-        } else if (draft.length === 0) {
+        } else if (finalContent.length === 0) {
           // The model produced no text and no streaming content — common
           // on some tool-only turns. Leave a hint so the user isn't
           // staring at a "…" message.
-          const msgId = stream.messageIdForEdit();
           if (msgId != null) {
             try {
               await this.bot.api.editMessageText(chatId, msgId, '🤔 No response received.');
