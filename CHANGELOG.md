@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `AGENTS.md` with build/test commands, source layout, conventions, architecture index, pitfalls, and feature-addition workflow
+- Added IMPORTANT note in `AGENTS.md` requiring granular CHANGELOG entries on every change and docs ↔ code parity checks
+- Added `CLAUDE.md` that points to `AGENTS.md` as the canonical entry point for AI coding agents
+
 ## 0.1.0 - 2024-06-01
 
 - Added Telegram bot entrypoint powered by grammY with long-polling message and callback handling
