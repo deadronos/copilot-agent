@@ -219,22 +219,28 @@ export class TelegramBot {
         const cancelled = this.cancelPendingPermissions(chatId, 'agent errored out');
 
         const errMsg = (err as Error).message ?? 'Unknown error';
+        // Friendly translation for the most common case the user sees:
+        // a hung agent on a slow provider. Without this they see a raw
+        // "Timeout after 330000ms waiting for session.idle" and have no
+        // idea what to do.
+        const friendly =
+          errMsg.includes('Timeout') && errMsg.includes('session.idle')
+            ? `⏳ The model didn't respond in time (${(this.config.permissions.timeout_seconds > 90 ? 90 : this.config.permissions.timeout_seconds)}s). The agent may be hung or the provider may be slow.\n\nTry:\n  • /model to switch to a faster model\n  • /new to start a fresh session\n  • Send your message again to retry`
+            : null;
+        const display = friendly ?? `⚠️ Error: ${errMsg.slice(0, 500)}`;
+        const tail = cancelled > 0 ? '\n\n_Pending permission prompts cleared._' : '';
+
         const errMsgId = stream.messageIdForEdit();
         if (errMsgId != null) {
           try {
-            await this.bot.api.editMessageText(
-              chatId,
-              errMsgId,
-              `⚠️ Error: ${errMsg.slice(0, 500)}` +
-                (cancelled > 0 ? '\n\n_Pending permission prompts cleared._' : ''),
-            );
+            await this.bot.api.editMessageText(chatId, errMsgId, display + tail);
           } catch {
             // If the edit fails, fall back to a fresh message so the user
             // always sees the error.
-            await ctx.reply(`⚠️ Error: ${errMsg.slice(0, 200)}`).catch(() => {});
+            await ctx.reply(display.slice(0, 200)).catch(() => {});
           }
         } else {
-          await ctx.reply(`⚠️ Error: ${errMsg.slice(0, 200)}`).catch(() => {});
+          await ctx.reply(display.slice(0, 200)).catch(() => {});
         }
       } finally {
         this.activeStreams.delete(chatId);

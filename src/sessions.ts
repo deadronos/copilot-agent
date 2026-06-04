@@ -22,22 +22,26 @@ import { getChildLogger } from './logger.js';
 const log = getChildLogger('sessions');
 
 /**
- * Extra milliseconds added to `permissions.timeout_seconds` when calling
- * `session.sendAndWait`. The SDK's `sendAndWait` defaults to a 60s timeout
- * for the agent to finish its turn. When the agent is blocked on a
- * permission request waiting for the user to click a button, no
- * `session.idle` event fires until the permission resolves. If the user
- * takes longer than the SDK timeout (very common — they have to read the
- * prompt, decide, and click), the SDK times out, the session is orphaned,
- * and the user's click arrives too late to be acted on. The user's full
- * permission window is `permissions.timeout_seconds`; the SDK must wait
- * at least that long, plus a buffer for the tool call to actually run
- * after approval. Exported for testing.
+ * Hard cap on the SDK `sendAndWait` timeout. The SDK waits for the
+ * agent to finish its turn. When the agent is blocked on a permission
+ * prompt, the SDK's wait timer does not include the user's think-time
+ * separately — it just races against `session.idle`. We want:
+ *
+ *  - long enough to cover "agent is thinking, hasn't emitted `idle` yet"
+ *  - short enough that a hung agent fails fast and the user gets feedback
+ *
+ * 90s is the empirical sweet spot: long enough for slow models on
+ * large prompts, short enough that the user isn't left staring at
+ * silence for 5+ minutes. The `permissions.timeout_seconds` config
+ * controls how long the user has to CLICK a button, which is a
+ * different concern and is enforced separately in the message handler
+ * (see `TelegramBot.showPermissionPrompt` + the `pendingPermissions`
+ * map). Exported for testing.
  */
-export const POST_PERMISSION_BUFFER_MS = 30_000;
+export const MAX_SEND_AND_WAIT_MS = 90_000;
 
-/** Floor for the SDK timeout so we never race the SDK's 60s default. */
-export const MIN_SEND_AND_WAIT_MS = 90_000;
+/** Floor for the SDK timeout so we never go below the SDK's 60s default. */
+export const MIN_SEND_AND_WAIT_MS = 60_000;
 
 export class SessionManager {
   private sessions = new Map<number, SessionEntry>();
@@ -556,16 +560,26 @@ export class SessionManager {
   }
 
   /**
-   * Compute the timeout (in ms) to pass to `session.sendAndWait`. The
-   * user's full permission window is `permissions.timeout_seconds`; the
-   * SDK must wait at least that long, plus a buffer for the tool call
-   * to actually run after the user clicks Allow. See
-   * `POST_PERMISSION_BUFFER_MS` for the rationale. A hard floor of
-   * `MIN_SEND_AND_WAIT_MS` protects against misconfigured very-short
-   * timeouts racing the SDK's 60s default.
+   * Compute the timeout (in ms) to pass to `session.sendAndWait`.
+   *
+   * Note: this is **not** the user's permission window. That's a
+   * separate concern — `permissions.timeout_seconds` controls how
+   * long a permission prompt stays on screen before the user is
+   * considered to have ignored it. The two used to be coupled (the
+   * SDK timeout = permission window + 30s buffer), but that meant
+   * the user waited in silence for 5+ minutes when the agent hung.
+   *
+   * The right value here is: "how long do we wait for the agent to
+   * make progress before declaring it stuck?" Hard-capped at
+   * `MAX_SEND_AND_WAIT_MS` (90s) so a hung model fails fast. If
+   * `permissions.timeout_seconds` is configured shorter than 90s we
+   * honor that as a floor.
    */
   private sendAndWaitTimeoutMs(): number {
-    const fromConfig = this.config.permissions.timeout_seconds * 1000 + POST_PERMISSION_BUFFER_MS;
-    return Math.max(fromConfig, MIN_SEND_AND_WAIT_MS);
+    const permissionWindowMs = this.config.permissions.timeout_seconds * 1000;
+    return Math.max(
+      Math.min(permissionWindowMs, MAX_SEND_AND_WAIT_MS),
+      MIN_SEND_AND_WAIT_MS,
+    );
   }
 }

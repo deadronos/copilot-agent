@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SessionManager, POST_PERMISSION_BUFFER_MS } from './sessions.js';
+import { SessionManager, MAX_SEND_AND_WAIT_MS } from './sessions.js';
 import type { AppConfig, AgentDefinition } from './types.js';
 import type { CopilotClient } from '@github/copilot-sdk';
 import type { StreamSink } from './streaming.js';
@@ -26,43 +26,41 @@ function makeAgents(): Map<string, AgentDefinition> {
 }
 
 describe('SessionManager.sendAndWaitTimeoutMs', () => {
-  it('is at least permissions.timeout_seconds in milliseconds', () => {
-    // Regression: previously this used the SDK default of 60s, which
-    // caused the SDK to time out on the agent turn *before* the user
-    // could click a permission button, orphaning the session.
+  it('caps the SDK timeout at MAX_SEND_AND_WAIT_MS so a hung agent fails fast', () => {
+    // Regression: previously the SDK timeout = permission_window + 30s
+    // buffer, which meant a 5-minute permission window produced a
+    // 5.5-minute SDK wait. When the agent hung, the user waited in
+    // silence for 5+ minutes and any permission clicks after the SDK
+    // timed out were silently dropped. The timeout is now a separate
+    // concern from the permission window.
     const mgr = new SessionManager({
       client: {} as CopilotClient,
       config: makeConfig({ timeout_seconds: 300 }),
       configDir: '/tmp',
       agents: makeAgents(),
     });
-    // Access the private method via bracket notation for the assertion.
     const ms = (mgr as unknown as { sendAndWaitTimeoutMs: () => number }).sendAndWaitTimeoutMs();
-    expect(ms).toBe(300_000 + POST_PERMISSION_BUFFER_MS);
+    expect(ms).toBe(MAX_SEND_AND_WAIT_MS);
+    expect(ms).toBeLessThanOrEqual(MAX_SEND_AND_WAIT_MS);
   });
 
-  it('grows with timeout_seconds so a longer permission window is respected', () => {
-    const short = new SessionManager({
+  it('honors a short timeout_seconds when it is greater than or equal to the SDK default', () => {
+    // If the user configures timeout_seconds: 90, the SDK should
+    // wait exactly 90s — the cap (90s) is an upper bound, not a lower
+    // one. The floor (60s) only kicks in for very-short configs.
+    const mgr = new SessionManager({
       client: {} as CopilotClient,
-      config: makeConfig({ timeout_seconds: 60 }),
+      config: makeConfig({ timeout_seconds: 90 }),
       configDir: '/tmp',
       agents: makeAgents(),
     });
-    const long = new SessionManager({
-      client: {} as CopilotClient,
-      config: makeConfig({ timeout_seconds: 600 }),
-      configDir: '/tmp',
-      agents: makeAgents(),
-    });
-    const shortMs = (short as unknown as { sendAndWaitTimeoutMs: () => number }).sendAndWaitTimeoutMs();
-    const longMs = (long as unknown as { sendAndWaitTimeoutMs: () => number }).sendAndWaitTimeoutMs();
-    expect(longMs).toBeGreaterThan(shortMs);
-    expect(longMs - shortMs).toBe((600 - 60) * 1000);
+    const ms = (mgr as unknown as { sendAndWaitTimeoutMs: () => number }).sendAndWaitTimeoutMs();
+    expect(ms).toBe(90_000);
   });
 
-  it('always exceeds the SDK default of 60s so permission flows never race the timeout', () => {
-    // The SDK default is 60_000ms. The minimum config value (timeout_seconds: 1)
-    // should still produce a value well above 60s thanks to the buffer.
+  it('never goes below the SDK default of 60s', () => {
+    // The SDK's own default is 60s. Passing a smaller value would
+    // race the SDK's internal default, so we floor at 60s.
     const mgr = new SessionManager({
       client: {} as CopilotClient,
       config: makeConfig({ timeout_seconds: 1 }),
@@ -70,7 +68,7 @@ describe('SessionManager.sendAndWaitTimeoutMs', () => {
       agents: makeAgents(),
     });
     const ms = (mgr as unknown as { sendAndWaitTimeoutMs: () => number }).sendAndWaitTimeoutMs();
-    expect(ms).toBeGreaterThan(60_000);
+    expect(ms).toBeGreaterThanOrEqual(60_000);
   });
 });
 
