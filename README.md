@@ -22,17 +22,17 @@ npm start
 
 ## Commands
 
-| Command | Effect |
-|---|---|
-| `/start` | Greet, show current provider/model/agent |
-| `/new` | Start a fresh session |
-| `/resume [n]` | Resume the n-th most recent archived session |
-| `/provider [name]` | List or switch provider |
-| `/model [name]` | List or switch model |
-| `/agent [name]` | List or switch agent |
-| `/status` | Show current session info |
-| `/approve` / `/deny` | Reply to the most recent permission prompt |
-| `/help` | Show commands |
+| Command              | Effect                                       |
+| -------------------- | -------------------------------------------- |
+| `/start`             | Greet, show current provider/model/agent     |
+| `/new`               | Start a fresh session                        |
+| `/resume [n]`        | Resume the n-th most recent archived session |
+| `/provider [name]`   | List or switch provider                      |
+| `/model [name]`      | List or switch model                         |
+| `/agent [name]`      | List or switch agent                         |
+| `/status`            | Show current session info                    |
+| `/approve` / `/deny` | Reply to the most recent permission prompt   |
+| `/help`              | Show commands                                |
 
 ## Configuration
 

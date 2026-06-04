@@ -1,10 +1,10 @@
-import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-import matter from "gray-matter";
-import type { AppConfig, AgentDefinition } from "./types.js";
-import { getChildLogger } from "./logger.js";
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import matter from 'gray-matter';
+import type { AppConfig, AgentDefinition } from './types.js';
+import { getChildLogger } from './logger.js';
 
-const log = getChildLogger("agents");
+const log = getChildLogger('agents');
 
 /**
  * Scan the agents directory and load all agent definitions.
@@ -15,11 +15,11 @@ export function loadAgents(config: AppConfig, configDir: string): Map<string, Ag
   const agents = new Map<string, AgentDefinition>();
 
   if (!existsSync(agentsDir)) {
-    log.warn({ agentsDir }, "Agents directory does not exist");
+    log.warn({ agentsDir }, 'Agents directory does not exist');
     return agents;
   }
 
-  const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+  const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
 
   for (const file of files) {
     const filePath = join(agentsDir, file);
@@ -27,16 +27,13 @@ export function loadAgents(config: AppConfig, configDir: string): Map<string, Ag
       const agent = parseAgentFile(filePath);
       if (agent) {
         if (agents.has(agent.name)) {
-          log.warn(
-            { name: agent.name, file },
-            "Duplicate agent name, later file wins"
-          );
+          log.warn({ name: agent.name, file }, 'Duplicate agent name, later file wins');
         }
         agents.set(agent.name, agent);
-        log.info({ name: agent.name, file }, "Loaded agent");
+        log.info({ name: agent.name, file }, 'Loaded agent');
       }
     } catch (err) {
-      log.error({ file, err }, "Failed to load agent file");
+      log.error({ file, err }, 'Failed to load agent file');
       throw new Error(`Malformed agent file ${filePath}: ${(err as Error).message}`);
     }
   }
@@ -45,7 +42,7 @@ export function loadAgents(config: AppConfig, configDir: string): Map<string, Ag
   if (!agents.has(config.agents.default)) {
     log.warn(
       { default: config.agents.default, available: [...agents.keys()] },
-      "Default agent not found"
+      'Default agent not found',
     );
   }
 
@@ -56,7 +53,7 @@ export function loadAgents(config: AppConfig, configDir: string): Map<string, Ag
  * Parse a single agent markdown file with frontmatter.
  */
 function parseAgentFile(filePath: string): AgentDefinition | null {
-  const raw = readFileSync(filePath, "utf-8");
+  const raw = readFileSync(filePath, 'utf-8');
   const { data, content } = matter(raw);
 
   if (!data.name) {
@@ -66,7 +63,7 @@ function parseAgentFile(filePath: string): AgentDefinition | null {
 
   return {
     name: data.name,
-    description: data.description ?? "",
+    description: data.description ?? '',
     model: data.model,
     tools: data.tools,
     prompt: content.trim(),
@@ -76,11 +73,12 @@ function parseAgentFile(filePath: string): AgentDefinition | null {
 /**
  * Get a system message config for the SDK from an agent definition.
  */
-export function getAgentSystemMessage(
-  agent: AgentDefinition
-): { mode: "replace"; content: string } {
+export function getAgentSystemMessage(agent: AgentDefinition): {
+  mode: 'replace';
+  content: string;
+} {
   return {
-    mode: "replace",
+    mode: 'replace',
     content: agent.prompt,
   };
 }

@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync, existsSync, cpSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { resolveConfigDir } from "./config.js";
+import { mkdirSync, writeFileSync, existsSync, cpSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { resolveConfigDir } from './config.js';
 
 const CONFIG_TEMPLATE = `# copilot-agent configuration
 # See idea.md for full documentation
@@ -79,7 +79,7 @@ function main(): void {
   console.log(`Setting up copilot-agent in ${configDir}`);
 
   // Create directories
-  const dirs = ["agents", "skills", "sessions", "logs"];
+  const dirs = ['agents', 'skills', 'sessions', 'logs'];
   for (const dir of dirs) {
     const full = join(configDir, dir);
     if (!existsSync(full)) {
@@ -91,34 +91,34 @@ function main(): void {
   }
 
   // Write config template
-  const configPath = join(configDir, "config.yaml");
+  const configPath = join(configDir, 'config.yaml');
   if (!existsSync(configPath)) {
     writeFileSync(configPath, CONFIG_TEMPLATE);
-    console.log("  Created config.yaml — EDIT THIS FILE to add your Telegram user ID");
+    console.log('  Created config.yaml — EDIT THIS FILE to add your Telegram user ID');
   } else {
-    console.log("  config.yaml already exists");
+    console.log('  config.yaml already exists');
   }
 
   // Write .env template
-  const envPath = join(configDir, ".env");
+  const envPath = join(configDir, '.env');
   if (!existsSync(envPath)) {
     writeFileSync(envPath, ENV_TEMPLATE);
-    console.log("  Created .env — EDIT THIS FILE to add your API keys");
+    console.log('  Created .env — EDIT THIS FILE to add your API keys');
   } else {
-    console.log("  .env already exists");
+    console.log('  .env already exists');
   }
 
   // Write default agent
-  const agentPath = join(configDir, "agents", "assistant.md");
+  const agentPath = join(configDir, 'agents', 'assistant.md');
   if (!existsSync(agentPath)) {
     writeFileSync(agentPath, ASSISTANT_AGENT);
-    console.log("  Created agents/assistant.md");
+    console.log('  Created agents/assistant.md');
   } else {
-    console.log("  agents/assistant.md already exists");
+    console.log('  agents/assistant.md already exists');
   }
 
-  console.log("");
-  console.log("Setup complete! Next steps:");
+  console.log('');
+  console.log('Setup complete! Next steps:');
   console.log(`  1. Edit ${configPath}`);
   console.log(`     - Add your Telegram user ID to telegram.allowed_user_ids`);
   console.log(`  2. Edit ${envPath}`);
