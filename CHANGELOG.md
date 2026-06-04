@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added `docs/specs/` folder with 1 high-level spec (`00-high-level.md`) and 7 boundary specs (`01-channel-adapter.md` through `07-webui-control-surface.md`). Specs describe the target architecture: multi-channel plug-in bot with subprocess-isolated adapters (Telegram, TUI, Discord, future WebUI chat) over stdio+JSON-RPC IPC; `ControlAPI` for the WebUI's non-chat features (session history, agent editor, log tail, config, status, provider/model switcher); soft-TTL session store with cold archive; channel-capability dispatch for stream sinks and permission UI. The existing `docs/ARCHITECTURE/` ADRs remain the current-state record; the two will be reconciled as work lands. Each spec is a target-state design doc, not a description of the current code, and includes open questions with recommended defaults.
+
 ## 0.1.1 - 2026-06-04
 
 - Fixed assistant responses never reaching Telegram when the Copilot SDK emits `assistant.message` as an empty completion signal. `onAssistantMessage` in [src/streaming.ts](src/streaming.ts) was unconditionally replacing the accumulated draft with `fullContent`, so when `data.content` was undefined the draft became `''` and the Telegram message reverted to `…`. The sink now only replaces the draft when `fullContent` is non-empty. Additionally, the message handler in [src/telegram.ts](src/telegram.ts) now falls back to `sendAndWait`'s `response.content` when the draft is empty after streaming, ensuring the user always sees the answer even if streaming events were lost or wiped. New regression tests in [src/streaming.test.ts](src/streaming.test.ts).
