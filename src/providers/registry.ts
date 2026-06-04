@@ -83,5 +83,7 @@ function validateProvider(provider: Provider): void {
 // ── Compile-time registration ────────────────────────────────────────
 
 import { githubCopilotProvider } from './github-copilot/index.js';
+import { opencodeGoProvider } from './opencode-go/index.js';
 
 registerProvider(githubCopilotProvider);
+registerProvider(opencodeGoProvider);

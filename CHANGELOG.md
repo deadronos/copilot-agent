@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added `opencode-go` provider (`src/providers/opencode-go/`): OpenAI-compatible API key auth via `OPENCODE_GO_API_KEY`, base URL `https://opencode.ai/zen/go/v1`, static catalog with 5 models (GLM-5.1, Kimi K2.6, MiniMax M2.7, DeepSeek V4 Pro, Qwen 3.6 Plus), dynamic model discovery from `/v1/models` with 15-minute TTL and graceful fallback to the static catalog.
 - Reimplemented `npm run setup` (`src/setup.ts`): scaffolds the config directory (`config.yaml`, `.env`, `agents/assistant.md`, `sessions/`, `presets/`), skips existing files for idempotent re-runs, and prints next steps.
 - Config dir `.env` is now loaded with `override: true` after the CWD `.env` (`src/config.ts`), so API tokens in `<configDir>/.env` take priority — no more `export` commands needed.
 - Rewrote `README.md` to match the current codebase: fixed command table (removed non-existent `/start`, corrected `/provider` and `/model` to require args), added CLI section with all subcommands, replaced outdated config guide with the current `config.yaml` schema and `presets/` system, added `npm run build` and `npm run setup` to quick start, removed references to missing `setup.ts`, `setup:service`, and `skills/` directory, and updated the project description to reflect multi-channel architecture and provider-as-code plug-in system.
