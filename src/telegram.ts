@@ -3,6 +3,7 @@ import { getChildLogger } from './logger.js';
 import type { AppConfig, PermissionDecision } from './types.js';
 import { type SessionManager } from './sessions.js';
 import { formatPermissionMessage } from './permissions.js';
+import { TelegramStreamSink } from './streaming.js';
 import type { AgentDefinition } from './types.js';
 
 const log = getChildLogger('telegram');
@@ -24,6 +25,13 @@ export class TelegramBot {
       toolName: string;
     }
   >();
+  /**
+   * The in-flight `TelegramStreamSink` for each chat. When a new user
+   * message arrives while a previous response is still streaming, we
+   * abort the previous sink and start a fresh one so the user only ever
+   * sees one live draft message at a time.
+   */
+  private activeStreams = new Map<number, TelegramStreamSink>();
 
   constructor(opts: {
     token: string;
@@ -86,21 +94,46 @@ export class TelegramBot {
       // Skip commands (already handled)
       if (text.startsWith('/')) return;
 
-      // Send typing indicator
+      // If a previous response is still streaming for this chat, abort
+      // it so the user sees exactly one live draft at a time.
+      const previousStream = this.activeStreams.get(chatId);
+      if (previousStream) {
+        previousStream.abort();
+        this.activeStreams.delete(chatId);
+      }
+
+      // Create and seed a fresh stream sink for this user message. The
+      // session manager will pipe assistant deltas and tool events to it
+      // via the per-chat `activeSinks` map.
+      const stream = new TelegramStreamSink(this.bot, chatId, null);
+      this.activeStreams.set(chatId, stream);
+      await stream.start();
+
+      // Keep the typing indicator alive while the agent is working.
       const typingInterval = setInterval(() => {
         ctx.api.sendChatAction(chatId, 'typing').catch(() => {});
       }, 4000);
       await ctx.api.sendChatAction(chatId, 'typing').catch(() => {});
 
       try {
-        const response = await this.sessions.enqueueMessage(chatId, text);
+        const response = await this.sessions.enqueueMessage(chatId, text, stream);
 
         clearInterval(typingInterval);
+        // Make sure the final draft is flushed before we tear down.
+        await stream.flushNow();
 
-        if (response?.content) {
-          await this.sendLongMessage(ctx, response.content);
-        } else {
-          await ctx.reply('🤔 No response received.');
+        // If the response was empty (model produced no text — common on
+        // some tool-only turns), leave a hint so the user isn't staring
+        // at a "…" message.
+        if (!response?.content) {
+          const msgId = stream.messageIdForEdit();
+          if (msgId != null) {
+            try {
+              await this.bot.api.editMessageText(chatId, msgId, '🤔 No response received.');
+            } catch {
+              // Ignore — the stream sink already swallows edit errors.
+            }
+          }
         }
 
         // Check if we should suggest /new
@@ -112,18 +145,37 @@ export class TelegramBot {
         }
       } catch (err) {
         clearInterval(typingInterval);
+        await stream.flushNow().catch(() => {});
         log.error({ chatId, err }, 'Error processing message');
 
+        // If we errored out, the SDK session is likely dead. Any pending
+        // permission prompts for this chat are now orphans — the user
+        // could click them but the SDK won't act on the decision. Cancel
+        // them so the user gets clear feedback and the next message can
+        // start a fresh session.
+        const cancelled = this.cancelPendingPermissions(chatId, 'agent errored out');
+
         const errMsg = (err as Error).message ?? 'Unknown error';
-        if (errMsg.includes('unauthorized') || errMsg.includes('401')) {
-          await ctx.reply(
-            '🔑 Provider rejected the API key. Check config.yaml + .env, then /provider to switch.',
-          );
-        } else if (errMsg.includes('rate') || errMsg.includes('429')) {
-          await ctx.reply('⏳ Rate-limited by the provider. Try again in a moment.');
+        const errMsgId = stream.messageIdForEdit();
+        if (errMsgId != null) {
+          try {
+            await this.bot.api.editMessageText(
+              chatId,
+              errMsgId,
+              `⚠️ Error: ${errMsg.slice(0, 500)}` +
+                (cancelled > 0 ? '\n\n_Pending permission prompts cleared._' : ''),
+            );
+          } catch {
+            // If the edit fails, fall back to a fresh message so the user
+            // always sees the error.
+            await ctx.reply(`⚠️ Error: ${errMsg.slice(0, 200)}`).catch(() => {});
+          }
         } else {
-          await ctx.reply(`⚠️ Error: ${errMsg.slice(0, 200)}`);
+          await ctx.reply(`⚠️ Error: ${errMsg.slice(0, 200)}`).catch(() => {});
         }
+      } finally {
+        this.activeStreams.delete(chatId);
+        stream.abort();
       }
     });
   }
@@ -134,9 +186,15 @@ export class TelegramBot {
   private setupCallbackHandler(): void {
     this.bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data;
+      log.info(
+        { data, callbackQueryId: ctx.callbackQuery.id, chatId: ctx.chat?.id },
+        'Callback query received',
+      );
 
       if (!data.startsWith('perm:')) {
-        await ctx.answerCallbackQuery();
+        await ctx.answerCallbackQuery().catch((err) => {
+          log.warn({ err }, 'answerCallbackQuery failed (non-perm callback)');
+        });
         return;
       }
 
@@ -146,36 +204,66 @@ export class TelegramBot {
 
       const pending = this.pendingPermissions.get(requestId);
       if (!pending) {
-        await ctx.answerCallbackQuery({ text: '⏰ This prompt has expired.' });
+        await ctx.answerCallbackQuery({ text: '⏰ This prompt has expired.' }).catch((err) => {
+          log.warn({ requestId, err }, 'answerCallbackQuery failed on expired prompt');
+        });
         return;
       }
 
-      // Resolve the permission
-      if (action === 'allow-once') {
-        pending.resolve({ kind: 'approved' });
-        await ctx.answerCallbackQuery({ text: '✅ Allowed once' });
-        await ctx
-          .editMessageText(
-            `✅ Allowed: ${this.pendingPermissions.get(requestId)?.chatId ?? 'tool'}`,
-          )
-          .catch(() => {});
-      } else if (action === 'allow-session') {
-        // Add to session auto-approve set
-        const entry = this.sessions.getEntry(pending.chatId);
-        if (entry) {
-          // We need the tool name — store it in the pending permission
-          entry.autoApprovedTools.add(pending.toolName);
+      try {
+        // Resolve the permission FIRST so the SDK unblocks, then do the UI
+        // follow-ups. Telegram only honours answerCallbackQuery for ~30s; if
+        // the user clicked late, the resolve still works but the toast/edit
+        // may fail. Catch those failures — never let them crash the bot.
+        if (action === 'allow-once') {
+          pending.resolve({ kind: 'allow-once' });
+        } else if (action === 'allow-session') {
+          const entry = this.sessions.getEntry(pending.chatId);
+          if (entry) {
+            entry.autoApprovedTools.add(pending.toolName);
+          }
+          pending.resolve({ kind: 'allow-session' });
+        } else if (action === 'deny') {
+          pending.resolve({ kind: 'deny' });
+        } else {
+          await ctx.answerCallbackQuery({ text: '❓ Unknown action.' }).catch((err) => {
+            log.warn({ requestId, action, err }, 'answerCallbackQuery failed');
+          });
+          return;
         }
-        pending.resolve({ kind: 'approved' });
-        await ctx.answerCallbackQuery({ text: '✅ Allowed for this session' });
-        await ctx.editMessageText('✅ Allowed for this session').catch(() => {});
-      } else if (action === 'deny') {
-        pending.resolve({ kind: 'denied-interactively-by-user' });
-        await ctx.answerCallbackQuery({ text: '🚫 Denied' });
-        await ctx.editMessageText('🚫 Denied by user').catch(() => {});
-      }
 
-      this.pendingPermissions.delete(requestId);
+        this.pendingPermissions.delete(requestId);
+
+        const toast =
+          action === 'allow-once'
+            ? '✅ Allowed once'
+            : action === 'allow-session'
+              ? '✅ Allowed for this session'
+              : '🚫 Denied';
+
+        await ctx.answerCallbackQuery({ text: toast }).catch((err) => {
+          log.warn(
+            { requestId, err },
+            'answerCallbackQuery failed (query likely expired) — promise already resolved',
+          );
+        });
+
+        await ctx.editMessageText(toast).catch((err) => {
+          log.debug({ requestId, err }, 'editMessageText failed (query likely expired)');
+        });
+      } catch (err) {
+        // Last-resort safety net. Anything thrown above (e.g. bugs in
+        // session manager accessors) is logged here so the bot stays alive.
+        log.error({ requestId, action, err }, 'Unhandled error in permission callback');
+        await ctx.answerCallbackQuery({ text: '⚠️ Internal error.' }).catch(() => {});
+      }
+    });
+
+    // Catch-all error boundary for any other callback_query handler that
+    // might be added later. Without this, an unhandled rejection in
+    // long-running grammY middleware can crash the whole bot.
+    this.bot.catch((err) => {
+      log.error({ err }, 'Unhandled grammY error');
     });
   }
 
@@ -217,9 +305,33 @@ export class TelegramBot {
         });
       } catch (err) {
         log.error({ chatId, err }, 'Failed to send permission prompt');
-        resolve({ kind: 'denied-interactively-by-user' });
+        resolve({ kind: 'deny' });
       }
     });
+  }
+
+  /**
+   * Cancel all in-flight permission prompts for a chat, resolving them
+   * with `deny` so any awaiting SDK call unblocks. Returns the number of
+   * prompts cancelled. Use this when the SDK session is known to be dead
+   * (e.g. the agent loop errored out) so the user isn't left with
+   * orphaned buttons that look like they should do something.
+   */
+  private cancelPendingPermissions(chatId: number, reason: string): number {
+    let cancelled = 0;
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.chatId === chatId) {
+        log.info({ requestId, chatId, reason }, 'Cancelling orphaned permission prompt');
+        try {
+          pending.resolve({ kind: 'deny' });
+        } catch (err) {
+          log.warn({ requestId, err }, 'Failed to resolve cancelled permission');
+        }
+        this.pendingPermissions.delete(requestId);
+        cancelled++;
+      }
+    }
+    return cancelled;
   }
 
   /**
@@ -360,7 +472,7 @@ export class TelegramBot {
     const chatId = ctx.chat!.id;
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.chatId === chatId) {
-        pending.resolve({ kind: 'approved' });
+        pending.resolve({ kind: 'allow-once' });
         this.pendingPermissions.delete(requestId);
         await ctx.reply('✅ Approved.');
         return;
@@ -373,7 +485,7 @@ export class TelegramBot {
     const chatId = ctx.chat!.id;
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.chatId === chatId) {
-        pending.resolve({ kind: 'denied-interactively-by-user' });
+        pending.resolve({ kind: 'deny' });
         this.pendingPermissions.delete(requestId);
         await ctx.reply('🚫 Denied.');
         return;

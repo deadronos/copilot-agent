@@ -15,15 +15,42 @@ import type {
 } from './types.js';
 import { resolveProviderAuth } from './config.js';
 import { getAgentSystemMessage } from './agents.js';
-import { shouldAutoApprove } from './permissions.js';
+import { shouldAutoApprove, toSdkPermissionResult } from './permissions.js';
+import { noopStreamSink, type StreamSink } from './streaming.js';
 import { getChildLogger } from './logger.js';
 
 const log = getChildLogger('sessions');
+
+/**
+ * Extra milliseconds added to `permissions.timeout_seconds` when calling
+ * `session.sendAndWait`. The SDK's `sendAndWait` defaults to a 60s timeout
+ * for the agent to finish its turn. When the agent is blocked on a
+ * permission request waiting for the user to click a button, no
+ * `session.idle` event fires until the permission resolves. If the user
+ * takes longer than the SDK timeout (very common — they have to read the
+ * prompt, decide, and click), the SDK times out, the session is orphaned,
+ * and the user's click arrives too late to be acted on. The user's full
+ * permission window is `permissions.timeout_seconds`; the SDK must wait
+ * at least that long, plus a buffer for the tool call to actually run
+ * after approval. Exported for testing.
+ */
+export const POST_PERMISSION_BUFFER_MS = 30_000;
+
+/** Floor for the SDK timeout so we never race the SDK's 60s default. */
+export const MIN_SEND_AND_WAIT_MS = 90_000;
 
 export class SessionManager {
   private sessions = new Map<number, SessionEntry>();
   private sdkSessions = new Map<number, CopilotSession>();
   private queues = new Map<number, Promise<void>>();
+  /**
+   * The active `StreamSink` for each chat. Replaced on every user
+   * message. The session-level `onEvent` handler dispatches to whichever
+   * sink is currently set, so streaming output is always piped to the
+   * right place even if the user sends messages faster than the agent
+   * can respond.
+   */
+  private activeSinks = new Map<number, StreamSink>();
   private client: CopilotClient;
   private config: AppConfig;
   private configDir: string;
@@ -57,6 +84,67 @@ export class SessionManager {
     ) => Promise<PermissionDecision>,
   ): void {
     this.permissionPromptCallback = cb;
+  }
+
+  /**
+   * Set the active `StreamSink` for a chat. Subsequent SDK events for
+   * this chat's session will be dispatched to this sink until the next
+   * call. Callers MUST call `setActiveSink(chatId, noopStreamSink)` (or
+   * another sink) before discarding the previous one, to avoid
+   * cross-message leakage.
+   */
+  setActiveSink(chatId: number, sink: StreamSink): void {
+    this.activeSinks.set(chatId, sink);
+  }
+
+  private getActiveSink(chatId: number): StreamSink {
+    return this.activeSinks.get(chatId) ?? noopStreamSink;
+  }
+
+  /**
+   * Dispatch a Copilot SDK session event to the chat's active sink.
+   * Called from the `onEvent` hook registered at session creation. Each
+   * event type maps to one `StreamSink` method; unknown event types are
+   * silently ignored (the SDK may add new event types in the future).
+   */
+  private dispatchEvent(chatId: number, event: unknown): void {
+    const sink = this.getActiveSink(chatId);
+    if (!event || typeof event !== 'object') return;
+    const e = event as { type?: string; data?: Record<string, unknown> };
+    switch (e.type) {
+      case 'assistant.message_delta': {
+        const data = e.data as { messageId?: string; deltaContent?: string } | undefined;
+        sink.onAssistantDelta?.(data?.messageId ?? '', data?.deltaContent ?? '');
+        break;
+      }
+      case 'assistant.message': {
+        const data = e.data as { messageId?: string; content?: string } | undefined;
+        sink.onAssistantMessage?.(data?.messageId ?? '', data?.content ?? '');
+        break;
+      }
+      case 'tool.execution_start': {
+        const data = e.data as { toolCallId?: string; toolName?: string; arguments?: unknown };
+        sink.onToolStart?.(data?.toolCallId ?? '', data?.toolName ?? '', data?.arguments);
+        break;
+      }
+      case 'tool.execution_complete': {
+        const data = e.data as { toolCallId?: string };
+        sink.onToolEnd?.(data?.toolCallId ?? '');
+        break;
+      }
+      case 'session.error': {
+        const data = e.data as { message?: string } | undefined;
+        sink.onSessionError?.(data?.message ?? 'unknown error');
+        break;
+      }
+      case 'session.idle': {
+        sink.onSessionIdle?.();
+        break;
+      }
+      default:
+        // Forward-compatible: ignore unknown event types.
+        break;
+    }
   }
 
   /**
@@ -122,6 +210,7 @@ export class SessionManager {
       provider: providerConfig,
       streaming: true,
       systemMessage: agent ? getAgentSystemMessage(agent) : undefined,
+      onEvent: (event) => this.dispatchEvent(chatId, event),
       onPermissionRequest: (
         request: PermissionRequest,
         _invocation: { sessionId: string },
@@ -178,7 +267,7 @@ export class SessionManager {
     // Check auto-approve
     if (shouldAutoApprove(this.config, entry, toolName, toolName)) {
       log.debug({ chatId, toolName }, 'Auto-approved tool');
-      return { kind: 'approved' as const };
+      return toSdkPermissionResult({ kind: 'allow-once' });
     }
 
     // deny-all mode
@@ -191,33 +280,56 @@ export class SessionManager {
     // Ask user via Telegram
     const decision = await this.permissionPromptCallback(chatId, toolName, description, toolCallId);
 
-    return { kind: decision.kind };
+    // Translate our internal decision (allow-once / allow-session / deny) to
+    // the SDK's wire protocol. Returning the wrong `kind` here causes the
+    // SDK to silently drop the decision and the tool call hangs.
+    return toSdkPermissionResult(decision);
   }
 
   /**
    * Enqueue a message for a chat (serializes per-chat).
+   *
+   * If `sink` is provided, it becomes the active sink for the duration
+   * of this call: the session's `onEvent` hook will route streaming
+   * events to it. When the call resolves or rejects, the sink is
+   * replaced with `noopStreamSink` so subsequent activity in the queue
+   * doesn't accidentally stream to a sink the caller has already
+   * detached.
    */
   async enqueueMessage(
     chatId: number,
     prompt: string,
+    sink: StreamSink = noopStreamSink,
   ): Promise<{ content: string; sessionId: string } | undefined> {
     const prev: Promise<void> = this.queues.get(chatId) ?? Promise.resolve();
 
     const task = prev.then(
       async (): Promise<{ content: string; sessionId: string } | undefined> => {
-        const { entry, session } = await this.getOrCreateSession(chatId);
-        entry.messageCount++;
-        entry.lastActivityAt = Date.now();
+        this.setActiveSink(chatId, sink);
+        try {
+          const { entry, session } = await this.getOrCreateSession(chatId);
+          entry.messageCount++;
+          entry.lastActivityAt = Date.now();
 
-        // Check soft cap
-        if (entry.messageCount >= this.config.session.max_messages) {
-          log.info({ chatId, count: entry.messageCount }, 'Session hit max messages');
+          // Check soft cap
+          if (entry.messageCount >= this.config.session.max_messages) {
+            log.info({ chatId, count: entry.messageCount }, 'Session hit max messages');
+          }
+
+          const response = await session.sendAndWait(
+            {
+              prompt,
+            },
+            this.sendAndWaitTimeoutMs(),
+          );
+          return response
+            ? { content: response.data?.content ?? '', sessionId: entry.sessionId }
+            : undefined;
+        } finally {
+          // Detach the sink so it doesn't receive events from later
+          // (queued) work in the same session.
+          this.setActiveSink(chatId, noopStreamSink);
         }
-
-        const response = await session.sendAndWait({ prompt });
-        return response
-          ? { content: response.data?.content ?? '', sessionId: entry.sessionId }
-          : undefined;
       },
     );
 
@@ -309,9 +421,12 @@ export class SessionManager {
 
     const session = this.sdkSessions.get(chatId)!;
 
-    await session.sendAndWait({
-      prompt: `Continuing from a previous session:\n\n${history}`,
-    });
+    await session.sendAndWait(
+      {
+        prompt: `Continuing from a previous session:\n\n${history}`,
+      },
+      this.sendAndWaitTimeoutMs(),
+    );
 
     return `Resumed session from ${new Date(archive.archivedAt).toLocaleString()}.`;
   }
@@ -438,5 +553,19 @@ export class SessionManager {
    */
   getEntry(chatId: number): SessionEntry | undefined {
     return this.sessions.get(chatId);
+  }
+
+  /**
+   * Compute the timeout (in ms) to pass to `session.sendAndWait`. The
+   * user's full permission window is `permissions.timeout_seconds`; the
+   * SDK must wait at least that long, plus a buffer for the tool call
+   * to actually run after the user clicks Allow. See
+   * `POST_PERMISSION_BUFFER_MS` for the rationale. A hard floor of
+   * `MIN_SEND_AND_WAIT_MS` protects against misconfigured very-short
+   * timeouts racing the SDK's 60s default.
+   */
+  private sendAndWaitTimeoutMs(): number {
+    const fromConfig = this.config.permissions.timeout_seconds * 1000 + POST_PERMISSION_BUFFER_MS;
+    return Math.max(fromConfig, MIN_SEND_AND_WAIT_MS);
   }
 }

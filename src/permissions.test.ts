@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoApprove, formatPermissionMessage } from './permissions.js';
+import { shouldAutoApprove, formatPermissionMessage, toSdkPermissionResult } from './permissions.js';
 import type { AppConfig, SessionEntry } from './types.js';
 
 function makeConfig(mode: AppConfig['permissions']['mode']): AppConfig {
@@ -75,5 +75,26 @@ describe('formatPermissionMessage', () => {
   it('handles empty description', () => {
     const msg = formatPermissionMessage('read', '');
     expect(msg).toContain('Read');
+  });
+});
+
+describe('toSdkPermissionResult', () => {
+  it('maps "allow-once" to the SDK protocol "approve-once"', () => {
+    // Regression: previously this returned { kind: 'approved' }, which the
+    // Copilot SDK silently rejected (no matching decision kind) and the
+    // pending tool call hung until timeout.
+    expect(toSdkPermissionResult({ kind: 'allow-once' })).toEqual({ kind: 'approve-once' });
+  });
+
+  it('maps "allow-session" to the SDK protocol "approve-for-session"', () => {
+    expect(toSdkPermissionResult({ kind: 'allow-session' })).toEqual({
+      kind: 'approve-for-session',
+    });
+  });
+
+  it('maps "deny" to "denied-interactively-by-user"', () => {
+    expect(toSdkPermissionResult({ kind: 'deny' })).toEqual({
+      kind: 'denied-interactively-by-user',
+    });
   });
 });

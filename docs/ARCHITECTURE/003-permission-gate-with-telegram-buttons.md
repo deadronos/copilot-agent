@@ -40,7 +40,8 @@ Three modes from `config.yaml → permissions.mode`:
 States involved:
 - **Pending permissions**: `Map<requestId, { chatId, resolve, messageId, toolName }>` in `TelegramBot`
 - **Session auto-approvals**: `Set<toolName>` on `SessionEntry` — populated when user clicks "Allow for session"
-- **Timeout**: Configurable via `permissions.timeout_seconds` (default 300). On timeout, resolves with `denied-interactively-by-user`.
+- **Timeout**: Configurable via `permissions.timeout_seconds` (default 300). On timeout, resolves with `deny`, which the boundary mapper then translates to the SDK's `denied-interactively-by-user`.
+- **SDK boundary mapping**: `toSdkPermissionResult` in [src/permissions.ts](src/permissions.ts) translates our internal `PermissionDecision` (`allow-once` / `allow-session` / `deny`) to the Copilot SDK's wire protocol (`approve-once` / `approve-for-session` / `denied-interactively-by-user`). The SDK's `PermissionDecision` union does **not** include a plain `approved` kind — returning one is silently dropped, which is what made the "Allow once" and "Allow for session" buttons appear to do nothing. See ADR 007 for the broader "type-safe SDK boundaries" pattern.
 
 ## Rationale
 

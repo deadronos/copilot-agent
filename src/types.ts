@@ -73,8 +73,14 @@ export interface PendingPermission {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Internal decision the Telegram bot produces when the user clicks a
+ * permission button (or the prompt times out). This is **not** the wire
+ * format the Copilot SDK expects — see `toSdkPermissionResult` in
+ * [src/permissions.ts](src/permissions.ts) for the boundary mapping.
+ */
 export interface PermissionDecision {
-  kind: 'approved' | 'denied-interactively-by-user';
+  kind: 'allow-once' | 'allow-session' | 'deny';
 }
 
 // --- Archived session ---
