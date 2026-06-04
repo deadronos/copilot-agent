@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Populated `docs/ARCHITECTURE/` with 10 ADR-style decision records (`001`–`010`) documenting every architectural decision: Copilot SDK backend and Telegram channel (001), XDG config and BYOK providers (002), permission gate (003), session store (004), custom agents (005), structured logging (006), type-safe boundaries (007), multi-channel architecture (008), provider-as-code (009), and testing strategy (010). Each ADR includes context, decision, consequences, and code references. Added `000-readme.md` index.
 - Implemented the full target architecture from `docs/specs/` (00 through 08) as a greenfield rewrite of the `src/` tree — 31 source modules totalling 5,268 lines of TypeScript:
   - **Shared types & config** (`src/types.ts`, `src/config.ts`, `src/logger.ts`): All domain types, Zod-validated config loading with XDG resolution, pino structured logging with secret redaction.
   - **Provider plugin system** (`src/providers/`): `Provider` interface with `onboard`/`login`/`logout`/`discoverModels`/`buildByokConfig`, `BaseProvider` abstract class, compile-time registry, shared utilities (`auth`, `device-flow`, `atomicWriteFile`, `fetchWithTimeout`), and a `github-copilot` provider with device-flow and API-key auth.
