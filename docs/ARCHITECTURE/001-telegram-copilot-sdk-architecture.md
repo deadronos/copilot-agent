@@ -95,9 +95,17 @@ This sink edits **one** Telegram message in place as the agent streams. Strategy
 3. `onToolStart` appends a `🔧 running \`toolName\` …` status line so the user sees the tool that just started before any permission prompt arrives.
 4. `onToolEnd` strips the most recent trailing tool-status line.
 5. `onSessionIdle`, `onAssistantMessage`, and `onSessionError` all flush the pending draft immediately.
-6. `abort()` is idempotent and stops further edits. Called when a new user message arrives (so the user never sees two overlapping drafts) or when the message handler finishes.
+6. `onAssistantMessage` only replaces the draft when `fullContent` is non-empty. Some SDK streaming configurations emit `assistant.message` as a bare completion signal with an empty `content` field; unconditionally replacing the draft would erase everything accumulated from `assistant.message_delta` chunks.
+7. `abort()` is idempotent and stops further edits. Called when a new user message arrives (so the user never sees two overlapping drafts) or when the message handler finishes.
 
 The sink never throws — streaming errors are logged and swallowed so they cannot crash the agent loop.
+
+### Fallback when streaming events are incomplete
+
+The message handler in `src/telegram.ts` does not rely solely on streaming events. After `enqueueMessage` resolves, it calls `stream.flushNow()` and then checks the draft. If the draft is empty but `sendAndWait` returned a `response.content`, the handler edits the Telegram message with that content directly. This guards against two failure modes:
+
+1. The SDK never emitted `assistant.message_delta` events (e.g. the provider ignores `streaming: true`).
+2. An empty `assistant.message` completion signal wiped the draft (the guard in `onAssistantMessage` prevents this, but the fallback ensures the user still sees the answer even if it somehow happens).
 
 ### Wiring
 

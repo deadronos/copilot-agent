@@ -104,6 +104,20 @@ describe('TelegramStreamSink', () => {
     expect(editMessageText).toHaveBeenLastCalledWith(123, 99, 'final text');
   });
 
+  it('onAssistantMessage does not wipe draft when fullContent is empty', async () => {
+    const editMessageText = vi.fn().mockResolvedValue(true);
+    const bot = makeFakeBot({ editMessageText });
+    const sink = new TelegramStreamSink(bot, 123, 99);
+    await sink.start();
+
+    sink.onAssistantDelta!('m1', 'preserved');
+    sink.onAssistantMessage!('m1', '');
+    await vi.runAllTimersAsync();
+
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    expect(editMessageText).toHaveBeenLastCalledWith(123, 99, 'preserved');
+  });
+
   it('onToolStart appends a "🔧 running X …" status line', async () => {
     const editMessageText = vi.fn().mockResolvedValue(true);
     const bot = makeFakeBot({ editMessageText });
@@ -139,6 +153,18 @@ describe('TelegramStreamSink', () => {
 
     const lastCall = editMessageText.mock.calls.at(-1);
     expect(lastCall?.[2]).toBe('Reading…');
+  });
+
+  it('getDraft returns the accumulated draft text', async () => {
+    const bot = makeFakeBot();
+    const sink = new TelegramStreamSink(bot, 123, 99);
+    await sink.start();
+
+    expect(sink.getDraft()).toBe('');
+    sink.onAssistantDelta!('m1', 'hello');
+    expect(sink.getDraft()).toBe('hello');
+    sink.onAssistantDelta!('m1', ' world');
+    expect(sink.getDraft()).toBe('hello world');
   });
 
   it('abort() stops further edits and is idempotent', async () => {

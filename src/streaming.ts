@@ -113,6 +113,15 @@ export class TelegramStreamSink implements StreamSink {
     return this.messageId;
   }
 
+  /**
+   * Return the current accumulated draft text. Exposed so the message
+   * handler can decide whether to fall back to the sendAndWait response
+   * when the streaming sink never received meaningful content.
+   */
+  getDraft(): string {
+    return this.draft;
+  }
+
   onAssistantDelta(messageId: string, delta: string): void {
     if (this.aborted) return;
     if (this.currentMessageId !== null && this.currentMessageId !== messageId) {
@@ -128,7 +137,13 @@ export class TelegramStreamSink implements StreamSink {
   onAssistantMessage(messageId: string, fullContent: string): void {
     if (this.aborted) return;
     this.currentMessageId = messageId;
-    this.draft = fullContent;
+    // Only replace the draft when the SDK actually repeats the content.
+    // Some streaming configurations emit assistant.message as a bare
+    // completion signal (content is empty). Wiping the draft would erase
+    // everything accumulated from assistant.message_delta events.
+    if (fullContent.length > 0) {
+      this.draft = fullContent;
+    }
     void this.flushNow();
   }
 

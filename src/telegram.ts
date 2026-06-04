@@ -185,10 +185,24 @@ export class TelegramBot {
         // Make sure the final draft is flushed before we tear down.
         await stream.flushNow();
 
-        // If the response was empty (model produced no text — common on
-        // some tool-only turns), leave a hint so the user isn't staring
-        // at a "…" message.
-        if (!response?.content) {
+        const draft = stream.getDraft();
+        if (response?.content) {
+          // If the streaming events never populated the draft (or it was
+          // wiped by an empty assistant.message completion signal), fall
+          // back to the sendAndWait response so the user isn't left
+          // staring at a "…" message.
+          const msgId = stream.messageIdForEdit();
+          if (msgId != null && draft.length === 0) {
+            try {
+              await this.bot.api.editMessageText(chatId, msgId, response.content);
+            } catch {
+              // Ignore — the stream sink already swallows edit errors.
+            }
+          }
+        } else if (draft.length === 0) {
+          // The model produced no text and no streaming content — common
+          // on some tool-only turns. Leave a hint so the user isn't
+          // staring at a "…" message.
           const msgId = stream.messageIdForEdit();
           if (msgId != null) {
             try {
