@@ -120,7 +120,21 @@ In all three cases, the gateway also issues a synthetic first prompt that record
 - **Depends on:** `config.ts` (for the `agents.dir` path).
 - **Depended on by:** the gateway's message handler (resolves the active agent on session creation); the WebUI's control surface (`07-webui-control-surface.md`) for the agent CRUD UI.
 
+## CLI integration
+
+The `copilot-agent` binary exposes agent-management subcommands. The CLI shares the agent registry's validation and file-format logic — it does not duplicate the parser.
+
+| Subcommand | Effect |
+|---|---|
+| `copilot-agent agent list` | List all loaded agents, sorted by name, with the active one marked. |
+| `copilot-agent agent show <name>` | Print the agent's source file (frontmatter + body). |
+| `copilot-agent agent create <name>` | Scaffold a new agent `.md` from a template; opens `$EDITOR` for editing. |
+| `copilot-agent agent edit <name>` | Open the agent file in `$EDITOR`. |
+| `copilot-agent agent delete <name>` | Delete the agent file (refuses if the agent is the active one or the default). |
+
+The `agent create` / `agent edit` / `agent delete` operations update the on-disk file; the bot picks up the change on next session creation (in-process registry reload is deferred to v2 — see open question 4 below).
+
 ## Open questions
 
-3. **Skills system.** The current `npm run setup` scaffolds a `skills/` folder but no spec mentions it. v1 recommendation: **defer to v2.** The agent file format and registry don't need to know about skills in v1. A future v2 spec can introduce a `skills: [name1, name2]` field in the frontmatter and a parallel `skills/` dir.
-4. **Hot-reload of agent definitions.** v1 recommendation: **YAGNI.** Restart on change is fine for a personal tool. A v2 extension could add a `chokidar` watcher that re-parses changed files and atomically swaps the registry entry, while active sessions keep their old system prompt. *Trade-off:* hot-reload complicates the registry's concurrency story (the `load()` becomes `reload()`) for a feature the user may not actually need.
+1. **Skills system.** The current `npm run setup` scaffolds a `skills/` folder but no spec mentions it. v1 recommendation: **defer to v2.** The agent file format and registry don't need to know about skills in v1. A future v2 spec can introduce a `skills: [name1, name2]` field in the frontmatter and a parallel `skills/` dir.
+2. **Hot-reload of agent definitions.** v1 recommendation: **YAGNI.** Restart on change is fine for a personal tool. A v2 extension could add a `chokidar` watcher that re-parses changed files and atomically swaps the registry entry, while active sessions keep their old system prompt. *Trade-off:* hot-reload complicates the registry's concurrency story (the `load()` becomes `reload()`) for a feature the user may not actually need.

@@ -42,7 +42,7 @@ export interface SessionStore {
 
 export interface CreateSessionOpts {
   readonly agent: string; // agent name
-  readonly provider: string;
+  readonly presetId: string; // active preset id (see 08-providers.md); resolves to a provider via the registry
   readonly model: string;
   readonly systemPromptOverride?: string;
 }
@@ -57,7 +57,7 @@ export interface SessionHandle {
   readonly sessionId: string;
   readonly userId: string;
   readonly agent: string;
-  readonly provider: string;
+  readonly presetId: string; // active preset id; provider is resolved via the registry (see 08-providers.md)
   readonly model: string;
   readonly createdAt: number;
   readonly lastActivityAt: number;
@@ -70,7 +70,7 @@ export interface ArchivedSession {
   readonly sessionId: string;
   readonly userId: string;
   readonly agent: string;
-  readonly provider: string;
+  readonly presetId: string;
   readonly model: string;
   readonly createdAt: number;
   readonly archivedAt: number;

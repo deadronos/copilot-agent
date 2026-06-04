@@ -10,6 +10,12 @@ A channel adapter is the gateway's only window onto a user-facing surface (Teleg
 
 The gateway knows nothing about any of those. It only knows that *some* channel delivered a message tagged with user X, and that it can *ask* some channel to send a message to user X, optionally streaming, and to show a permission prompt with these choices.
 
+### Where the code lives
+
+Channel adapters are **code modules in `src/channels/<name>/`**, symmetric to the provider layout in `08-providers.md`. The current Telegram code in `src/telegram.ts` and `src/streaming.ts` is the v1 *implementation*; in the target state its content moves to `src/channels/telegram/` behind the `ChannelAdapter` interface. A `_shared/` folder holds common stream-sink and length-cap helpers; the folder is an implementation detail, not a spec boundary. **Adding a new channel = writing a new module under `src/channels/<name>/` and registering it in `src/channels/registry.ts`; no gateway edit required.**
+
+The same "extend a base class or implement the interface directly" choice from `08-providers.md` applies to channels: simple adapters can extend a `BaseChannelAdapter` (in `src/channels/_shared/`) to inherit the default `stop()` / `onMessage()` / outbound-send boilerplate, while adapters with very channel-specific lifecycles (Telegram's long-polling, TUI's stdio attachment) implement the interface directly.
+
 ## Interface
 
 ```typescript

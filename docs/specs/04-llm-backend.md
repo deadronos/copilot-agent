@@ -30,15 +30,17 @@ export interface LlmBackend {
 
 export interface LlmSession {
   readonly sessionId: string;
-  readonly provider: string;
+  readonly presetId: string; // active preset id; the underlying provider is resolved via the registry (see 08-providers.md)
   readonly model: string;
   /** Send a prompt and stream events to the given sink. Resolves when the
    *  session goes idle (or `sendAndWaitTimeoutMs` elapses). */
   send(opts: SendOpts): Promise<SendResult>;
   /** Switch the model on the live session. History is preserved. */
   switchModel(model: string): Promise<void>;
-  /** Switch the provider on the live session. History is preserved. */
-  switchProvider(provider: string): Promise<void>;
+  /** Switch the preset on the live session. The LLM backend resolves the
+   *  preset to a provider via the registry and asks the SDK to switch.
+   *  History is preserved. */
+  switchPreset(presetId: string): Promise<void>;
   /** Subscribe to SDK events not tied to a specific `send()` call. */
   onEvent(handler: (event: LlmEvent) => void): () => void;
   /** Destroy the session. */
@@ -48,7 +50,7 @@ export interface LlmSession {
 export interface CreateSessionOpts {
   readonly userId: string;
   readonly agent: string; // agent name; the registry resolves the system prompt
-  readonly provider: string;
+  readonly presetId: string; // active preset id; the backend resolves it to a provider via the registry (see 08-providers.md)
   readonly model: string;
   /** Optional pre-resolved system prompt; if absent, the backend asks the registry. */
   readonly systemPrompt?: string;
@@ -80,11 +82,17 @@ export type LlmEvent =
 
 ## Provider model
 
-Unchanged from ADR 002. The backend reads `config.yaml` for the provider list and `.env` for the credentials. The Copilot SDK handles the actual provider handshakes (OpenAI, Anthropic, Ollama, anything OpenAI-compatible, plus the default GitHub Copilot provider).
+The LLM backend does not own provider configuration — it owns the **BYOK construction seam** with the Copilot SDK. The actual provider configuration lives in `<configDir>/presets/<name>.yaml` (created by the CLI) and the provider code lives in `src/providers/<name>/` (compiled into the bot). For the full provider contract, see `08-providers.md`.
 
-**Switching providers** is a live-session operation: the backend closes the current SDK session's connection to provider A and opens one to provider B, preserving the message history. The Copilot SDK supports this natively; the backend just calls the right SDK method.
+At session creation, the backend:
+1. Loads the active preset by `presetId`.
+2. Looks up the provider in `src/providers/registry.ts` via `registry.getProvider(preset.provider)`.
+3. Calls `provider.buildByokConfig(preset)` and passes the result to the Copilot SDK's `createSession`.
+4. For dynamic model catalogs, the gateway called `provider.discoverModels(preset)` at startup and the backend uses the cached result for `/model` validation. If the cache is empty or the call failed, the backend falls back to the preset's static `models` array.
 
-**Provider enablement** is config-driven. The gateway does not care which providers are configured; it only sees the names. The first provider in `config.yaml`'s `providers:` list is the default.
+**Switching providers** is a live-session operation: the user runs `/provider <id>`, which resolves to a new preset (with a different `presetId`); the next session is created with the new provider's BYOK config. The Copilot SDK supports this natively; the backend just calls the right SDK method with the new `byok`.
+
+**Provider enablement** is config-driven via `<configDir>/presets/` and the `active.preset` field in `config.yaml`. The gateway does not care which providers exist; it only sees the active preset's id.
 
 ## SDK lifecycle
 

@@ -37,8 +37,8 @@ export interface ControlAPI {
   // ── Status ──────────────────────────────────────────────────────────
   getStatus(): Promise<StatusView>;
 
-  // ── Provider / model switching (mirrors /provider and /model) ────────
-  switchProvider(userId: string, provider: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  // ── Preset / model switching (mirrors /provider and /model) ───────────
+  switchPreset(userId: string, presetId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   switchModel(userId: string, model: string): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
@@ -73,7 +73,7 @@ export interface ConfigView {
 }
 
 export type ConfigPatch =
-  | { kind: 'set-provider-default'; provider: string }
+  | { kind: 'set-preset-default'; presetId: string }
   | { kind: 'set-agent-default'; agent: string }
   | { kind: 'set-telegram-allowlist'; allowlist: string[] }
   | { kind: 'set-permission-mode'; mode: 'approve-all' | 'readonly-default' | 'deny-all' }
@@ -123,6 +123,17 @@ export interface StatusView {
 The dashboard server is a regular Node.js process started by the user (e.g. `npm run webui` or as part of `npm start` if the WebUI is enabled in config). It serves the SPA on a configurable port, hosts an in-process chat adapter that registers with the gateway, and runs a `ControlAPI` client that proxies the dashboard's requests to the gateway.
 
 **Why one process for the WebUI:** the chat and the dashboard share state (auth, cookies, the user's session, the current user identity). Splitting them into two processes would require duplicating that state. v1 keeps them together; the v2 escape hatch is documented below.
+
+## CLI mirror
+
+The `copilot-agent` binary's `config` subcommands mirror this spec's `ControlAPI` mutations. Both call into the same Zod-validated path so the two surfaces can't drift:
+
+| CLI subcommand | ControlAPI equivalent |
+|---|---|
+| `copilot-agent config get [key]` | `getConfig()` (returns the structured view; secrets are presence-only) |
+| `copilot-agent config set <key> <value>` | `updateConfig(patch)` (same `ConfigPatch` union, same validation, same audit log) |
+
+The CLI does not implement its own config parser. It dispatches to the same handler the WebUI uses, over the same in-process function call (the CLI is part of the same binary; no IPC needed for config operations). Secrets are redacted in CLI output the same way the WebUI redacts them in `getConfig()`.
 
 ## Authentication
 
