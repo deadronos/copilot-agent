@@ -1,4 +1,6 @@
 import { Bot, type Context } from 'grammy';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { getChildLogger } from './logger.js';
 import type { AppConfig, PermissionDecision } from './types.js';
 import { type SessionManager } from './sessions.js';
@@ -11,11 +13,68 @@ const log = getChildLogger('telegram');
 // Telegram message length limit
 const MAX_MESSAGE_LENGTH = 4096;
 
+interface PersistedPendingPermission {
+  requestId: string;
+  chatId: number;
+  messageId: number;
+  toolName: string;
+  /** Unix-ms timestamp when the prompt was created. Used for TTL. */
+  createdAt: number;
+}
+
+/**
+ * Load any pending permission records from disk and notify the user
+ * (via `editMessage`) that they were interrupted by a restart. Always
+ * called at startup; safe to invoke on a missing or corrupted file.
+ *
+ * Exported for testing — the live `TelegramBot` calls this with the
+ * real `bot.api.editMessageText`; tests pass a fake.
+ */
+export function rehydratePendingPermissionsFromDisk(
+  path: string,
+  timeoutMs: number,
+  editMessage: (chatId: number, messageId: number, text: string) => Promise<unknown>,
+): void {
+  if (!existsSync(path)) return;
+  let parsed: PersistedPendingPermission[];
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    parsed = JSON.parse(raw) as PersistedPendingPermission[];
+  } catch (err) {
+    log.warn({ err, path }, 'Failed to read pending-permissions.json; ignoring');
+    return;
+  }
+  const now = Date.now();
+  for (const p of parsed) {
+    const ageMs = now - p.createdAt;
+    const message = p.toolName.charAt(0).toUpperCase() + p.toolName.slice(1);
+    const text =
+      ageMs < timeoutMs
+        ? `⚠️ The prompt for **${message}** was interrupted by a bot restart. Please resend your request to get a fresh prompt.`
+        : `⏰ The prompt for **${message}** has expired. Please resend your request if you still want to run it.`;
+    // Fire-and-forget — rehydration must not block the bot startup.
+    void editMessage(p.chatId, p.messageId, text).catch((err) =>
+      log.warn({ err, requestId: p.requestId }, 'Failed to mark orphan prompt'),
+    );
+    log.info(
+      { requestId: p.requestId, chatId: p.chatId, ageMs, expired: ageMs >= timeoutMs },
+      'Rehydrated orphan permission prompt; marked as interrupted',
+    );
+  }
+  // Always clear the on-disk file — every record is now handled.
+  try {
+    writeFileSync(path, '[]');
+  } catch (err) {
+    log.warn({ err }, 'Failed to clear pending-permissions.json after rehydration');
+  }
+}
+
 export class TelegramBot {
   private bot: Bot;
   private config: AppConfig;
   private sessions: SessionManager;
   private agents: Map<string, AgentDefinition>;
+  private configDir: string;
   private pendingPermissions = new Map<
     string,
     {
@@ -23,6 +82,7 @@ export class TelegramBot {
       resolve: (decision: PermissionDecision) => void;
       messageId: number;
       toolName: string;
+      createdAt: number;
     }
   >();
   /**
@@ -36,14 +96,17 @@ export class TelegramBot {
   constructor(opts: {
     token: string;
     config: AppConfig;
+    configDir: string;
     sessions: SessionManager;
     agents: Map<string, AgentDefinition>;
   }) {
     this.bot = new Bot(opts.token);
     this.config = opts.config;
+    this.configDir = opts.configDir;
     this.sessions = opts.sessions;
     this.agents = opts.agents;
 
+    this.rehydratePendingPermissions();
     this.setupMiddleware();
     this.setupCommands();
     this.setupMessageHandler();
@@ -204,6 +267,7 @@ export class TelegramBot {
 
       const pending = this.pendingPermissions.get(requestId);
       if (!pending) {
+        log.warn({ requestId, action }, 'Callback received but no matching pending permission');
         await ctx.answerCallbackQuery({ text: '⏰ This prompt has expired.' }).catch((err) => {
           log.warn({ requestId, err }, 'answerCallbackQuery failed on expired prompt');
         });
@@ -233,6 +297,7 @@ export class TelegramBot {
         }
 
         this.pendingPermissions.delete(requestId);
+        this.persistPendingPermissions();
 
         const toast =
           action === 'allow-once'
@@ -302,7 +367,9 @@ export class TelegramBot {
           resolve,
           messageId: sent.message_id,
           toolName,
+          createdAt: Date.now(),
         });
+        this.persistPendingPermissions();
       } catch (err) {
         log.error({ chatId, err }, 'Failed to send permission prompt');
         resolve({ kind: 'deny' });
@@ -328,10 +395,67 @@ export class TelegramBot {
           log.warn({ requestId, err }, 'Failed to resolve cancelled permission');
         }
         this.pendingPermissions.delete(requestId);
+        this.persistPendingPermissions();
         cancelled++;
       }
     }
     return cancelled;
+  }
+
+  /**
+   * Persist the current `pendingPermissions` map to disk so a bot
+   * restart (dev `tsx watch`, crash, graceful deploy) doesn't strand
+   * the user with a button that does nothing when they click it. The
+   * `resolve` function can't be serialized, so on rehydration we
+   * synthesise a new resolver and edit the original Telegram message
+   * to mark it as interrupted; the user resends their request and we
+   * start a fresh prompt with a fresh `requestId`.
+   *
+   * Stored as a JSON object keyed by `requestId` at
+   * `<configDir>/pending-permissions.json`. Best-effort: a write
+   * failure is logged but never throws.
+   */
+  private persistPendingPermissions(): void {
+    const path = join(this.configDir, 'pending-permissions.json');
+    const persisted: PersistedPendingPermission[] = [];
+    for (const [requestId, p] of this.pendingPermissions) {
+      persisted.push({
+        requestId,
+        chatId: p.chatId,
+        messageId: p.messageId,
+        toolName: p.toolName,
+        createdAt: p.createdAt,
+      });
+    }
+    try {
+      writeFileSync(path, JSON.stringify(persisted, null, 2));
+    } catch (err) {
+      log.warn({ err }, 'Failed to persist pending permissions');
+    }
+  }
+
+  /**
+   * On startup, load any pending permission records from disk. Each
+   * record represents a prompt that the previous process sent but the
+   * user may not have clicked yet. We can't fulfil the original SDK
+   * promise (the `resolve` is gone with the old process), so we:
+   * 1. Edit the original Telegram message to "expired" or
+   *    "interrupted by restart", so the user knows what happened.
+   * 2. Drop the record — no point keeping a zombie in memory.
+   *
+   * Records still within `permissions.timeout_seconds` get a softer
+   * message ("interrupted, please resend"); expired ones get a firmer
+   * "expired" message.
+   */
+  private rehydratePendingPermissions(): void {
+    rehydratePendingPermissionsFromDisk(
+      join(this.configDir, 'pending-permissions.json'),
+      this.config.permissions.timeout_seconds * 1000,
+      (chatId, messageId, text) =>
+        this.bot.api.editMessageText(chatId, messageId, text).catch((err) =>
+          log.warn({ err }, 'Failed to mark orphan prompt'),
+        ),
+    );
   }
 
   /**
@@ -474,6 +598,7 @@ export class TelegramBot {
       if (pending.chatId === chatId) {
         pending.resolve({ kind: 'allow-once' });
         this.pendingPermissions.delete(requestId);
+        this.persistPendingPermissions();
         await ctx.reply('✅ Approved.');
         return;
       }
@@ -487,6 +612,7 @@ export class TelegramBot {
       if (pending.chatId === chatId) {
         pending.resolve({ kind: 'deny' });
         this.pendingPermissions.delete(requestId);
+        this.persistPendingPermissions();
         await ctx.reply('🚫 Denied.');
         return;
       }

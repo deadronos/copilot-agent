@@ -42,6 +42,7 @@ async function main(): Promise<void> {
   const telegramBot = new TelegramBot({
     token: telegramToken,
     config,
+    configDir,
     sessions: sessionManager,
     agents,
   });
