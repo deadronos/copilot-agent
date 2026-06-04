@@ -1,19 +1,24 @@
-import { writeFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { CopilotClient, type CopilotSession } from "@github/copilot-sdk";
+import { writeFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import {
+  type CopilotClient,
+  type CopilotSession,
+  type PermissionRequest,
+  type PermissionRequestResult,
+} from '@github/copilot-sdk';
 import type {
   AppConfig,
   AgentDefinition,
   SessionEntry,
   ArchivedSession,
   PermissionDecision,
-} from "./types.js";
-import { resolveProviderAuth } from "./config.js";
-import { getAgentSystemMessage } from "./agents.js";
-import { shouldAutoApprove, createPermissionRequest } from "./permissions.js";
-import { getChildLogger } from "./logger.js";
+} from './types.js';
+import { resolveProviderAuth } from './config.js';
+import { getAgentSystemMessage } from './agents.js';
+import { shouldAutoApprove } from './permissions.js';
+import { getChildLogger } from './logger.js';
 
-const log = getChildLogger("sessions");
+const log = getChildLogger('sessions');
 
 export class SessionManager {
   private sessions = new Map<number, SessionEntry>();
@@ -27,7 +32,7 @@ export class SessionManager {
     chatId: number,
     toolName: string,
     description: string,
-    requestId: string
+    requestId: string,
   ) => Promise<PermissionDecision>;
 
   constructor(opts: {
@@ -44,7 +49,12 @@ export class SessionManager {
 
   /** Set the permission prompt callback (called by TelegramBot after init). */
   setPermissionPromptCallback(
-    cb: (chatId: number, toolName: string, description: string, requestId: string) => Promise<PermissionDecision>
+    cb: (
+      chatId: number,
+      toolName: string,
+      description: string,
+      requestId: string,
+    ) => Promise<PermissionDecision>,
   ): void {
     this.permissionPromptCallback = cb;
   }
@@ -73,7 +83,7 @@ export class SessionManager {
     chatId: number,
     providerName: string,
     model: string,
-    agentName?: string
+    agentName?: string,
   ): Promise<{ entry: SessionEntry; session: CopilotSession }> {
     // End existing session if any
     await this.endSession(chatId);
@@ -89,11 +99,11 @@ export class SessionManager {
 
     // Build provider config for SDK
     const providerConfig = {
-      type: provider.type as "openai" | "azure" | "anthropic",
+      type: provider.type as 'openai' | 'azure' | 'anthropic',
       baseUrl: provider.base_url,
       apiKey: auth.apiKey,
       bearerToken: auth.bearerToken,
-      wireApi: provider.wire_api as "completions" | "responses" | undefined,
+      wireApi: provider.wire_api as 'completions' | 'responses' | undefined,
     };
 
     // Use agent's model if specified, otherwise use the provided model
@@ -103,7 +113,7 @@ export class SessionManager {
 
     log.info(
       { chatId, provider: providerName, model: effectiveModel, agent: activeAgent, sessionId },
-      "Creating new session"
+      'Creating new session',
     );
 
     const session = await this.client.createSession({
@@ -112,16 +122,24 @@ export class SessionManager {
       provider: providerConfig,
       streaming: true,
       systemMessage: agent ? getAgentSystemMessage(agent) : undefined,
-      onPermissionRequest: (request: any, _invocation: any): any => {
-        const toolName = (request as any).toolName ?? request.kind;
+      onPermissionRequest: (
+        request: PermissionRequest,
+        _invocation: { sessionId: string },
+      ): Promise<PermissionRequestResult> => {
+        const toolName = 'toolName' in request ? request.toolName : request.kind;
         const description =
-          "fullCommandText" in request
-            ? (request as any).fullCommandText ?? ""
-            : "fileName" in request
-              ? (request as any).fileName ?? ""
-              : "";
+          'fullCommandText' in request
+            ? request.fullCommandText
+            : 'fileName' in request
+              ? request.fileName
+              : '';
 
-        return this.handlePermissionRequest(chatId, toolName, description, (request as any).toolCallId ?? `${chatId}-${Date.now()}`);
+        return this.handlePermissionRequest(
+          chatId,
+          toolName,
+          description,
+          request.toolCallId ?? `${chatId}-${Date.now()}`,
+        );
       },
     });
 
@@ -150,31 +168,28 @@ export class SessionManager {
     chatId: number,
     toolName: string,
     description: string,
-    toolCallId: string
-  ): Promise<any> {
+    toolCallId: string,
+  ): Promise<PermissionRequestResult> {
     const entry = this.sessions.get(chatId);
     if (!entry) {
-      return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
+      return { kind: 'denied-no-approval-rule-and-could-not-request-from-user' };
     }
 
     // Check auto-approve
     if (shouldAutoApprove(this.config, entry, toolName, toolName)) {
-      log.debug({ chatId, toolName }, "Auto-approved tool");
-      return { kind: "approved" as const };
+      log.debug({ chatId, toolName }, 'Auto-approved tool');
+      return { kind: 'approved' as const };
     }
 
     // deny-all mode
-    if (this.config.permissions.mode === "deny-all") {
-      return { kind: "denied-by-rules" as const };
+    if (this.config.permissions.mode === 'deny-all') {
+      // The "rule" lives in app config, not the SDK's per-tool rule registry,
+      // so we return an empty rule list and let the SDK surface the denial.
+      return { kind: 'denied-by-rules', rules: [] };
     }
 
     // Ask user via Telegram
-    const decision = await this.permissionPromptCallback(
-      chatId,
-      toolName,
-      description,
-      toolCallId
-    );
+    const decision = await this.permissionPromptCallback(chatId, toolName, description, toolCallId);
 
     return { kind: decision.kind };
   }
@@ -184,28 +199,36 @@ export class SessionManager {
    */
   async enqueueMessage(
     chatId: number,
-    prompt: string
+    prompt: string,
   ): Promise<{ content: string; sessionId: string } | undefined> {
     const prev: Promise<void> = this.queues.get(chatId) ?? Promise.resolve();
 
-    const task = prev.then(async (): Promise<{ content: string; sessionId: string } | undefined> => {
-      const { entry, session } = await this.getOrCreateSession(chatId);
-      entry.messageCount++;
-      entry.lastActivityAt = Date.now();
+    const task = prev.then(
+      async (): Promise<{ content: string; sessionId: string } | undefined> => {
+        const { entry, session } = await this.getOrCreateSession(chatId);
+        entry.messageCount++;
+        entry.lastActivityAt = Date.now();
 
-      // Check soft cap
-      if (entry.messageCount >= this.config.session.max_messages) {
-        log.info({ chatId, count: entry.messageCount }, "Session hit max messages");
-      }
+        // Check soft cap
+        if (entry.messageCount >= this.config.session.max_messages) {
+          log.info({ chatId, count: entry.messageCount }, 'Session hit max messages');
+        }
 
-      const response = await session.sendAndWait({ prompt });
-      return response
-        ? { content: response.data?.content ?? "", sessionId: entry.sessionId }
-        : undefined;
-    });
+        const response = await session.sendAndWait({ prompt });
+        return response
+          ? { content: response.data?.content ?? '', sessionId: entry.sessionId }
+          : undefined;
+      },
+    );
 
     // Keep the queue going but don't let errors propagate to next message
-    this.queues.set(chatId, task.then(() => {}, () => {}));
+    this.queues.set(
+      chatId,
+      task.then(
+        () => {},
+        () => {},
+      ),
+    );
 
     return task;
   }
@@ -224,7 +247,7 @@ export class SessionManager {
 
     const provider = this.config.providers[providerName];
     if (!provider) {
-      return `Unknown provider: **${providerName}**. Available: ${Object.keys(this.config.providers).join(", ")}`;
+      return `Unknown provider: **${providerName}**. Available: ${Object.keys(this.config.providers).join(', ')}`;
     }
 
     await this.createSession(chatId, providerName, oldModel);
@@ -247,7 +270,7 @@ export class SessionManager {
    */
   async switchAgent(chatId: number, agentName: string): Promise<string> {
     if (!this.agents.has(agentName)) {
-      return `Unknown agent: **${agentName}**. Available: ${[...this.agents.keys()].join(", ")}`;
+      return `Unknown agent: **${agentName}**. Available: ${[...this.agents.keys()].join(', ')}`;
     }
 
     const provider = this.sessions.get(chatId)?.provider ?? this.config.active.provider;
@@ -272,7 +295,7 @@ export class SessionManager {
   async resumeSession(chatId: number, index: number = 1): Promise<string> {
     const archives = this.listArchives(chatId);
     if (archives.length === 0) {
-      return "No archived sessions found.";
+      return 'No archived sessions found.';
     }
 
     const idx = Math.min(index - 1, archives.length - 1);
@@ -282,11 +305,8 @@ export class SessionManager {
     await this.createSession(chatId, archive.provider, archive.model, archive.agentName);
 
     // Replay history as a synthetic prompt
-    const history = archive.messages
-      .map((m) => `[${m.role}]: ${m.content}`)
-      .join("\n\n");
+    const history = archive.messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n');
 
-    const entry = this.sessions.get(chatId)!;
     const session = this.sdkSessions.get(chatId)!;
 
     await session.sendAndWait({
@@ -301,7 +321,7 @@ export class SessionManager {
    */
   getStatus(chatId: number): string {
     const entry = this.sessions.get(chatId);
-    if (!entry) return "No active session. Send a message to start one.";
+    if (!entry) return 'No active session. Send a message to start one.';
 
     const uptime = Math.floor((Date.now() - entry.createdAt) / 60000);
     return [
@@ -311,7 +331,7 @@ export class SessionManager {
       `Agent: ${entry.agentName}`,
       `Messages: ${entry.messageCount}`,
       `Uptime: ${uptime}m`,
-    ].join("\n");
+    ].join('\n');
   }
 
   /**
@@ -323,7 +343,7 @@ export class SessionManager {
 
     if (entry && session) {
       try {
-        const messages = await (session as any).getMessages?.() ?? [];
+        const events = await session.getEvents();
         const archive: ArchivedSession = {
           chatId,
           provider: entry.provider,
@@ -331,16 +351,21 @@ export class SessionManager {
           agentName: entry.agentName,
           createdAt: entry.createdAt,
           archivedAt: Date.now(),
-          messages: (messages ?? []).map((m: any) => ({
-            role: m.type ?? "unknown",
-            content: m.data?.content ?? "",
-            timestamp: Date.now(),
-          })),
+          messages: events.flatMap((e) => {
+            switch (e.type) {
+              case 'assistant.message':
+                return [{ role: 'assistant', content: e.data.content, timestamp: Date.now() }];
+              case 'user.message':
+                return [{ role: 'user', content: e.data.content, timestamp: Date.now() }];
+              default:
+                return [];
+            }
+          }),
         };
 
         this.saveArchive(archive);
       } catch (err) {
-        log.warn({ chatId, err }, "Failed to get messages for archiving");
+        log.warn({ chatId, err }, 'Failed to get messages for archiving');
       }
     }
 
@@ -356,7 +381,7 @@ export class SessionManager {
       try {
         await session.disconnect();
       } catch (err) {
-        log.warn({ chatId, err }, "Error disconnecting session");
+        log.warn({ chatId, err }, 'Error disconnecting session');
       }
       this.sdkSessions.delete(chatId);
     }
@@ -375,7 +400,7 @@ export class SessionManager {
     const filename = `${archive.chatId}-${archive.archivedAt}.json`;
     const filepath = join(historyDir, filename);
     writeFileSync(filepath, JSON.stringify(archive, null, 2));
-    log.info({ chatId: archive.chatId, filepath }, "Session archived");
+    log.info({ chatId: archive.chatId, filepath }, 'Session archived');
   }
 
   /**
@@ -386,12 +411,12 @@ export class SessionManager {
     if (!existsSync(historyDir)) return [];
 
     const files = readdirSync(historyDir)
-      .filter((f) => f.startsWith(`${chatId}-`) && f.endsWith(".json"))
+      .filter((f) => f.startsWith(`${chatId}-`) && f.endsWith('.json'))
       .sort()
       .reverse();
 
     return files.map((f) => {
-      const raw = readFileSync(join(historyDir, f), "utf-8");
+      const raw = readFileSync(join(historyDir, f), 'utf-8');
       return JSON.parse(raw) as ArchivedSession;
     });
   }
@@ -401,7 +426,7 @@ export class SessionManager {
    */
   async archiveAll(): Promise<void> {
     const chatIds = [...this.sessions.keys()];
-    log.info({ count: chatIds.length }, "Archiving all sessions");
+    log.info({ count: chatIds.length }, 'Archiving all sessions');
 
     for (const chatId of chatIds) {
       await this.archiveAndEnd(chatId);
