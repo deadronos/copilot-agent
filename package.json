@@ -1,0 +1,38 @@
+{
+  "name": "copilot-agent",
+  "version": "0.1.0",
+  "description": "Telegram bot powered by GitHub Copilot SDK",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "setup": "tsx src/setup.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "^1.0.0",
+    "grammy": "^1.43.0",
+    "yaml": "^2.9.0",
+    "dotenv": "^17.4.2",
+    "gray-matter": "^4.0.3",
+    "pino": "^10.3.1",
+    "pino-roll": "^4.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "eslint": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0"
+  }
+}

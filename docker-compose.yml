@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./copilot-agent-data:/data/copilot-agent
+    environment:
+      - COPILOT_AGENT_CONFIG_DIR=/data/copilot-agent
+    env_file:
+      - .env
