@@ -12,14 +12,17 @@ npm install
 # Build
 npm run build
 
-# Create a provider preset (interactive onboarding)
-node dist/index.js provider add github-copilot
+# Scaffold config directory (~/.config/copilot-agent/)
+npm run setup
 
 # Edit config (add your Telegram user ID)
 $EDITOR ~/.config/copilot-agent/config.yaml
 
-# Set the Telegram bot token
-export COPILOT_AGENT_TELEGRAM_TOKEN=your-bot-token
+# Set your tokens in the .env file
+$EDITOR ~/.config/copilot-agent/.env
+
+# Create a provider preset (interactive onboarding)
+node dist/index.js provider add github-copilot
 
 # Run the bot
 npm start
@@ -124,6 +127,8 @@ Archived session history.
 
 ### Environment variables
 
+Set API tokens in `<configDir>/.env` or export them directly.
+
 | Variable                          | Purpose                     |
 | --------------------------------- | --------------------------- |
 | `COPILOT_AGENT_TELEGRAM_TOKEN`    | Telegram bot token          |
@@ -167,4 +172,3 @@ npm run typecheck # type-check without building
 npm run lint      # lint source
 npm run build     # compile TypeScript
 ```
-

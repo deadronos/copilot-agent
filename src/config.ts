@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
 
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,16 @@ export function resolveConfigDir(): string {
     return path.join(process.env.XDG_CONFIG_HOME, 'copilot-agent');
   }
   return path.join(homedir(), '.config', 'copilot-agent');
+}
+
+// ── Config dir .env loading ───────────────────────────────────────
+// CWD .env is loaded first by the import above. Then we load the
+// config dir .env with override: true so it takes priority for
+// secrets like API tokens.
+
+{
+  const dir = resolveConfigDir();
+  dotenvConfig({ path: path.join(dir, '.env'), override: true });
 }
 
 // ── Zod schema (strict — rejects unknown keys) ─────────────────────
