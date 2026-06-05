@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed the `/resume [n]` command indexing bug: corrected the 1-indexed input in `GatewayImpl` to the 0-indexed lookup expected by the `SessionStore`, allowing the user to resume their most recent conversation (i.e. `/resume 1`).
+- Fixed the `@github/copilot-sdk` permission resolution loop: registered the `onPermissionRequest` callback on `SessionConfig` during session creation, and added a `resolvePermission` method to the `LlmSession` interface and `LlmSessionImpl` to communicate user/auto decisions back to the SDK over JSON-RPC, resolving tool-calling hangs.
+- Fixed native `github-copilot` provider initialization: modified `SessionConfig` creation to omit the custom `provider` object and set the `gitHubToken` property directly when using the native `github-copilot` provider, preventing auth and endpoint routing errors.
 - Enriched `ModelInfo` with `supportsVision`, `supportsReasoning`, `maxContextTokens`, `maxPromptTokens`; the LLM backend now maps these to the SDK's `modelCapabilities` override on every `createSession` call, so BYOK providers get correct capability hints (vision, reasoning, context limits) without relying on auto-discovery. Updated both provider catalogs with accurate metadata for all 8 models.
 - Added `opencode-go` provider (`src/providers/opencode-go/`): OpenAI-compatible API key auth via `OPENCODE_GO_API_KEY`, base URL `https://opencode.ai/zen/go/v1`, static catalog with 5 models (GLM-5.1, Kimi K2.6, MiniMax M2.7, DeepSeek V4 Pro, Qwen 3.6 Plus), dynamic model discovery from `/v1/models` with 15-minute TTL and graceful fallback to the static catalog.
 - Reimplemented `npm run setup` (`src/setup.ts`): scaffolds the config directory (`config.yaml`, `.env`, `agents/assistant.md`, `sessions/`, `presets/`), skips existing files for idempotent re-runs, and prints next steps.

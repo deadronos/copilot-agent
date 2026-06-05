@@ -5,6 +5,8 @@ import type {
   CopilotSession,
   SessionConfig,
   ModelCapabilitiesOverride,
+  PermissionRequest as SdkPermissionRequest,
+  PermissionRequestResult,
 } from '@github/copilot-sdk';
 import type {
   AssistantMessageDeltaEvent,
@@ -26,6 +28,7 @@ import type {
   SendOpts,
   SendResult,
   StreamSink,
+  PermissionChoice,
 } from './types.js';
 import {
   loadPreset,
@@ -33,6 +36,7 @@ import {
 import { createLogger } from './logger.js';
 import type { ByokConfig, Provider, PresetConfig, ModelInfo } from './providers/types.js';
 import { presetToPresetConfig } from './providers/types.js';
+import { toSdkPermissionResult } from './permissions.js';
 
 // ── Logger ────────────────────────────────────────────────────────────
 
@@ -106,6 +110,14 @@ class LlmSessionImpl implements LlmSession {
   private providerRegistry: ProviderRegistry;
   private agentRegistry: AgentRegistry;
   private _sink: StreamSink | undefined;
+
+  private pendingResolvers = new Map<
+    string,
+    {
+      resolve: (result: PermissionRequestResult) => void;
+      reject: (err: Error) => void;
+    }
+  >();
 
   constructor(
     sdkSession: CopilotSession,
@@ -432,6 +444,54 @@ class LlmSessionImpl implements LlmSession {
     void sdkProviderConfig; // reserved
   }
 
+  // ── handlePermissionRequest ───────────────────────────────────────
+
+  async handlePermissionRequest(pr: SdkPermissionRequest): Promise<PermissionRequestResult> {
+    const raw = pr as unknown as Record<string, unknown>;
+    const toolCallId = (typeof raw.toolCallId === 'string' && raw.toolCallId)
+      ? raw.toolCallId
+      : `prompt-${Math.random().toString(36).substring(2, 9)}`;
+    const toolName =
+      typeof raw.toolName === 'string'
+        ? raw.toolName
+        : typeof raw.kind === 'string'
+          ? raw.kind
+          : 'unknown';
+
+    return new Promise<PermissionRequestResult>((resolve, reject) => {
+      this.pendingResolvers.set(toolCallId, { resolve, reject });
+
+      // Emit to subscribers
+      for (const handler of this.eventHandlers) {
+        try {
+          handler({
+            kind: 'permission-request',
+            request: {
+              toolCallId,
+              toolName,
+              args: raw.args || raw.commands || raw.fileName || raw.diff,
+            },
+          });
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }
+
+  // ── resolvePermission ──────────────────────────────────────────────
+
+  resolvePermission(toolCallId: string, choice: PermissionChoice): void {
+    const resolver = this.pendingResolvers.get(toolCallId);
+    if (resolver) {
+      this.pendingResolvers.delete(toolCallId);
+      const sdkResult = toSdkPermissionResult(choice);
+      resolver.resolve(sdkResult);
+    } else {
+      log.warn({ toolCallId }, 'resolvePermission called for unknown toolCallId');
+    }
+  }
+
   // ── onEvent ───────────────────────────────────────────────────────
 
   onEvent(handler: (event: LlmEvent) => void): () => void {
@@ -451,6 +511,16 @@ class LlmSessionImpl implements LlmSession {
 
     // Clean up all external event handlers
     this.eventHandlers.clear();
+
+    // Reject/resolve all pending resolvers
+    for (const resolver of this.pendingResolvers.values()) {
+      try {
+        resolver.resolve({ kind: 'denied-interactively-by-user' });
+      } catch {
+        // ignore
+      }
+    }
+    this.pendingResolvers.clear();
 
     // Unsubscribe all SDK event listeners
     for (const unsub of this.sdkUnsubs) {
@@ -689,14 +759,24 @@ export class LlmBackendImpl implements LlmBackend {
     const sdkConfig: SessionConfig = {
       model: effectiveModel,
       streaming: true,
-      provider: sdkProvider,
       availableTools: tools,
       // Use replace mode with the agent's system prompt so the SDK
       // doesn't inject its own coding-agent system prompt.
       systemMessage: effectiveSystemPrompt
         ? { mode: 'replace' as const, content: effectiveSystemPrompt }
         : undefined,
+      ...(providerId === 'github-copilot'
+        ? { gitHubToken: byok.apiKey }
+        : { provider: sdkProvider }),
       ...(modelCapabilities && { modelCapabilities }),
+      onPermissionRequest: async (request, invocation) => {
+        const activeSession = this.sessions.get(invocation.sessionId);
+        if (!activeSession) {
+          this.logger.warn({ sessionId: invocation.sessionId }, 'Permission request for untracked session');
+          return { kind: 'denied-interactively-by-user' };
+        }
+        return activeSession.handlePermissionRequest(request);
+      },
     };
 
     // Create the SDK session

@@ -415,7 +415,7 @@ export class GatewayImpl implements Gateway {
   private async handlePermissionRequest(
     request: { toolCallId: string; toolName: string; args?: unknown },
     adapter: ChannelAdapter,
-    _session: LlmSession,
+    session: LlmSession,
   ): Promise<void> {
     const { toolCallId, toolName, args } = request;
     this.log.info({ toolCallId, toolName }, 'Permission request received');
@@ -430,11 +430,21 @@ export class GatewayImpl implements Gateway {
 
     if (evaluation.kind === 'auto-allow') {
       this.log.debug({ toolCallId, toolName }, 'Auto-allowed');
+      try {
+        session.resolvePermission(toolCallId, { kind: 'allow-once' });
+      } catch (err) {
+        this.log.error({ err, toolCallId }, 'Failed to resolve auto-allow on LLM session');
+      }
       return;
     }
 
     if (evaluation.kind === 'auto-deny') {
       this.log.debug({ toolCallId, toolName, reason: evaluation.reason }, 'Auto-denied');
+      try {
+        session.resolvePermission(toolCallId, { kind: 'deny' });
+      } catch (err) {
+        this.log.error({ err, toolCallId }, 'Failed to resolve auto-deny on LLM session');
+      }
       return;
     }
 
@@ -496,7 +506,7 @@ export class GatewayImpl implements Gateway {
     }
 
     // Await the user's response or timeout
-    await promise;
+    const response = await promise;
 
     // Deliver the response back to the permission gate.
     // The PermissionGate interface currently only exposes evaluate();
@@ -509,6 +519,13 @@ export class GatewayImpl implements Gateway {
       } catch {
         // gate's internal promise already resolved or timed out
       }
+    }
+
+    // Resolve the permission on the live LLM session/SDK
+    try {
+      session.resolvePermission(toolCallId, response.choice);
+    } catch (err) {
+      this.log.error({ err, toolCallId }, 'Failed to resolve permission on LLM session');
     }
   }
 
@@ -605,7 +622,7 @@ export class GatewayImpl implements Gateway {
           return { kind: 'error', message: 'Usage: `/resume [n]` where n >= 1.' };
         }
         try {
-          await this.sessionStore.resume(userId, n);
+          await this.sessionStore.resume(userId, n - 1);
           return { kind: 'handled', reply: `📂 Resumed session #${n}.` };
         } catch {
           return { kind: 'error', message: `No archived session #${n} found.` };

@@ -139,6 +139,7 @@ export interface LlmSession {
   send(opts: SendOpts): Promise<SendResult>;
   switchModel(model: string): Promise<void>;
   switchPreset(presetId: string): Promise<void>;
+  resolvePermission(toolCallId: string, choice: PermissionChoice): void;
   onEvent(handler: (event: LlmEvent) => void): () => void;
   destroy(): Promise<void>;
 }
