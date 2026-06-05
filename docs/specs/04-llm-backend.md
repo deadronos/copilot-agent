@@ -88,7 +88,21 @@ At session creation, the backend:
 1. Loads the active preset by `presetId`.
 2. Looks up the provider in `src/providers/registry.ts` via `registry.getProvider(preset.provider)`.
 3. Calls `provider.buildByokConfig(preset)` and passes the result to the Copilot SDK's `createSession`.
-4. For dynamic model catalogs, the gateway called `provider.discoverModels(preset)` at startup and the backend uses the cached result for `/model` validation. If the cache is empty or the call failed, the backend falls back to the preset's static `models` array.
+4. Resolves the effective model (opts override preset override agent), looks it up in `presetConfig.models`, and builds `modelCapabilities` from the `ModelInfo` metadata (`supportsVision`, `supportsReasoning`, `maxContextTokens`, `maxPromptTokens`). This override is passed to the SDK's `SessionConfig.modelCapabilities` so the SDK knows the model's actual capabilities without relying on auto-discovery.
+5. For dynamic model catalogs, the gateway called `provider.discoverModels(preset)` at startup and the backend uses the cached result for `/model` validation. If the cache is empty or the call failed, the backend falls back to the preset's static `models` array.
+
+## Model capabilities pass-through
+
+The SDK's `SessionConfigBase` accepts a `modelCapabilities?: ModelCapabilitiesOverride` field — a deep-partial override of the SDK's `ModelCapabilities` shape. When building the `SessionConfig`, the LLM backend maps our `ModelInfo` metadata (from the provider's static catalog or dynamically discovered list) into this override:
+
+| Our `ModelInfo` field | SDK `ModelCapabilities` path |
+|---|---|
+| `supportsVision` | `supports.vision` |
+| `supportsReasoning` | `supports.reasoningEffort` |
+| `maxContextTokens` (falls back to `contextWindow`) | `limits.max_context_window_tokens` |
+| `maxPromptTokens` | `limits.max_prompt_tokens` |
+
+If no model metadata is available (the model isn't in the catalog), no override is set and the SDK falls back to auto-discovery. This is safe but may result in incorrect defaults for BYOK providers where the SDK can't inspect the model.
 
 **Switching providers** is a live-session operation: the user runs `/provider <id>`, which resolves to a new preset (with a different `presetId`); the next session is created with the new provider's BYOK config. The Copilot SDK supports this natively; the backend just calls the right SDK method with the new `byok`.
 

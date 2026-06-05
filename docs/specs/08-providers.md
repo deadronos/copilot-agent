@@ -103,8 +103,13 @@ export type AuthConfig =
 export interface ModelInfo {
   readonly id: string;
   readonly displayName?: string;
+  /** @deprecated Use maxContextTokens instead. */
   readonly contextWindow?: number;
+  readonly maxContextTokens?: number;
+  readonly maxPromptTokens?: number;
   readonly supportsTools?: boolean;
+  readonly supportsVision?: boolean;
+  readonly supportsReasoning?: boolean;
 }
 
 export interface ModelCatalog {

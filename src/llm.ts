@@ -4,6 +4,7 @@ import { CopilotClient } from '@github/copilot-sdk';
 import type {
   CopilotSession,
   SessionConfig,
+  ModelCapabilitiesOverride,
 } from '@github/copilot-sdk';
 import type {
   AssistantMessageDeltaEvent,
@@ -30,7 +31,7 @@ import {
   loadPreset,
 } from './config.js';
 import { createLogger } from './logger.js';
-import type { ByokConfig, Provider, PresetConfig } from './providers/types.js';
+import type { ByokConfig, Provider, PresetConfig, ModelInfo } from './providers/types.js';
 import { presetToPresetConfig } from './providers/types.js';
 
 // ── Logger ────────────────────────────────────────────────────────────
@@ -488,6 +489,47 @@ function buildSdkProviderConfig(byok: ByokConfig): {
   };
 }
 
+// ── Model capabilities mapper ──────────────────────────────────────────
+
+/**
+ * Map our {@link ModelInfo} metadata to the SDK's
+ * {@link ModelCapabilitiesOverride} shape, so the SDK knows the model's
+ * actual capabilities rather than relying on auto-discovery alone.
+ */
+function buildModelCapabilities(
+  model?: ModelInfo,
+): ModelCapabilitiesOverride | undefined {
+  if (!model) return undefined;
+
+  const caps: ModelCapabilitiesOverride = {};
+
+  if (model.supportsVision !== undefined || model.supportsReasoning !== undefined) {
+    caps.supports = {};
+    if (model.supportsVision !== undefined) {
+      caps.supports.vision = model.supportsVision;
+    }
+    if (model.supportsReasoning !== undefined) {
+      caps.supports.reasoningEffort = model.supportsReasoning;
+    }
+  }
+
+  const maxTokens = model.maxContextTokens ?? model.contextWindow;
+  if (maxTokens !== undefined || model.maxPromptTokens !== undefined) {
+    caps.limits = {};
+    if (maxTokens !== undefined) {
+      caps.limits.max_context_window_tokens = maxTokens;
+    }
+    if (model.maxPromptTokens !== undefined) {
+      caps.limits.max_prompt_tokens = model.maxPromptTokens;
+    }
+  }
+
+  // Only return if we have at least one capability set
+  if (Object.keys(caps).length === 0) return undefined;
+
+  return caps;
+}
+
 // ── Backend implementation ─────────────────────────────────────────────
 
 export class LlmBackendImpl implements LlmBackend {
@@ -614,6 +656,10 @@ export class LlmBackendImpl implements LlmBackend {
       (preset.systemPrompt as string | undefined) ??
       agentDef.systemPrompt;
 
+    // Resolve model metadata for capability overrides
+    const modelInfo = presetConfig.models.find((m) => m.id === effectiveModel);
+    const modelCapabilities = buildModelCapabilities(modelInfo);
+
     // Build SessionConfig for the SDK
     const sdkConfig: SessionConfig = {
       model: effectiveModel,
@@ -624,6 +670,7 @@ export class LlmBackendImpl implements LlmBackend {
       systemMessage: effectiveSystemPrompt
         ? { mode: 'replace' as const, content: effectiveSystemPrompt }
         : undefined,
+      ...(modelCapabilities && { modelCapabilities }),
     };
 
     // Create the SDK session
