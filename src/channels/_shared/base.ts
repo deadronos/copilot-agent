@@ -38,7 +38,7 @@ export abstract class BaseChannelAdapter implements ChannelAdapter {
     throw new Error(`send() not implemented for channel "${this.id}"`);
   }
 
-  async startStream(_replyToMessageId?: string): Promise<StreamSink> {
+  async startStream(_replyToMessageId?: string, _context?: Record<string, unknown>): Promise<StreamSink> {
     throw new Error(`startStream() not implemented for channel "${this.id}"`);
   }
 

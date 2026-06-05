@@ -91,20 +91,14 @@ export class TelegramAdapter implements ChannelAdapter {
     await this.bot.api.sendMessage(chatId, message.text, opts);
   }
 
-  async startStream(_replyToMessageId?: string): Promise<StreamSink> {
-    if (!this.bot) throw new Error('Telegram bot not started');
-
-    // We need a chatId. For streaming, we expect the adapter to track the
-    // active chat. The replyToMessageId is used to derive context.
-    // In practice, the gateway will call this with the userId (used as chatId).
-    // For proper Telegram Sinks, we need a chat context.
-    //
-    // The stream sink needs a chatId to edit. We send a placeholder message
-    // first, then return a sink that edits it.
-
-    throw new Error(
-      'startStream() requires chat context — use startStreamForChat()',
-    );
+  async startStream(replyToMessageId?: string, context?: Record<string, unknown>): Promise<StreamSink> {
+    const chatId = context?.chatId as number | undefined;
+    if (!chatId) {
+      throw new Error(
+        'startStream() requires chatId in context — pass message meta',
+      );
+    }
+    return this.startStreamForChat(chatId, replyToMessageId);
   }
 
   /**

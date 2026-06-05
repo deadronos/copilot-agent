@@ -338,7 +338,7 @@ export class GatewayImpl implements Gateway {
       // Create stream sink
       const caps = adapter.capabilities;
       if (caps.streaming) {
-        sink = await adapter.startStream(messageId);
+        sink = await adapter.startStream(messageId, msg.meta);
       }
 
       // Subscribe to permission requests from the LLM session

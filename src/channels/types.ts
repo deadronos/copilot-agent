@@ -29,7 +29,7 @@ export interface ChannelAdapter {
   ): void;
 
   send(message: OutboundMessage): Promise<void>;
-  startStream(replyToMessageId?: string): Promise<StreamSink>;
+  startStream(replyToMessageId?: string, context?: Record<string, unknown>): Promise<StreamSink>;
 
   promptPermission(prompt: PermissionPrompt): Promise<PermissionResponse>;
 }

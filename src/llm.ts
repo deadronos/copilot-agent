@@ -73,6 +73,15 @@ function mapError(err: unknown): string {
     if (msg.includes('timeout') || msg.includes('timed out')) {
       return '⏳ The model didn\'t respond in time';
     }
+    // Streaming format compatibility — some BYOK providers don't include
+    // finish_reason in streaming chunks. The SDK retries but eventually
+    // gives up. Suggest trying a different model.
+    if (msg.includes('missing finish_reason') || msg.includes('Failed to get response')) {
+      return (
+        '⚠️ Streaming response format not fully compatible with this model. ' +
+        'Try a different model with `/model <id>`.'
+      );
+    }
     return msg;
   }
   return String(err);

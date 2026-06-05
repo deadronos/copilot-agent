@@ -40,7 +40,7 @@ export class NoopChannelAdapter implements ChannelAdapter {
   ): void {}
 
   async send(_message: OutboundMessage): Promise<void> {}
-  async startStream(_replyToMessageId?: string): Promise<StreamSink> {
+  async startStream(_replyToMessageId?: string, _context?: Record<string, unknown>): Promise<StreamSink> {
     return noopStreamSink;
   }
 
