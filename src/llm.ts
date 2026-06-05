@@ -562,7 +562,13 @@ export class LlmBackendImpl implements LlmBackend {
 
     // Instantiate CopilotClient in "empty" mode so the SDK doesn't
     // inject its own default system prompt, tools, or extensions.
-    this.client = new CopilotClient({ mode: 'empty' });
+    // Empty mode requires an explicit persistence location; we use the
+    // config directory so session state lives alongside the user's
+    // presets and agents.
+    this.client = new CopilotClient({
+      mode: 'empty',
+      baseDirectory: this.configDir,
+    });
 
     // The client auto-starts on first session creation, but we call
     // start() explicitly to catch startup errors early.
