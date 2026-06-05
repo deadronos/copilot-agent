@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 
-import { CopilotClient } from '@github/copilot-sdk';
+import { CopilotClient, ToolSet, BuiltInTools } from '@github/copilot-sdk';
 import type {
   CopilotSession,
   SessionConfig,
@@ -666,11 +666,22 @@ export class LlmBackendImpl implements LlmBackend {
     const modelInfo = presetConfig.models.find((m) => m.id === effectiveModel);
     const modelCapabilities = buildModelCapabilities(modelInfo);
 
+    // Build tool set from agent definition or fall back to Isolated defaults.
+    // In "empty" mode the SDK requires every session to explicitly opt into
+    // the tools it wants.
+    const tools = new ToolSet();
+    if (agentDef.tools && agentDef.tools.length > 0) {
+      tools.addBuiltIn(agentDef.tools);
+    } else {
+      tools.addBuiltIn(BuiltInTools.Isolated);
+    }
+
     // Build SessionConfig for the SDK
     const sdkConfig: SessionConfig = {
       model: effectiveModel,
       streaming: true,
       provider: sdkProvider,
+      availableTools: tools,
       // Use replace mode with the agent's system prompt so the SDK
       // doesn't inject its own coding-agent system prompt.
       systemMessage: effectiveSystemPrompt

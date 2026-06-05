@@ -321,7 +321,14 @@ export class GatewayImpl implements Gateway {
 
       const session = sessionHandle.live;
       if (!session) {
-        throw new Error('Session has no live LLM session');
+        // The LLM session may have failed to create earlier (e.g. config
+        // error). Try once to create it now — if it still fails, the user
+        // gets a clear error instead of a silent drop.
+        this.log.warn({ userId, sessionId: sessionHandle.sessionId }, 'Session missing live LLM session, attempting late creation');
+        throw new Error(
+          'Your session is still initialising. Please try again in a moment. ' +
+            'If this persists, check your preset configuration.',
+        );
       }
 
       // Show typing indicator (via stream start — channel-specific)
