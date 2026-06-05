@@ -45,7 +45,7 @@ agents:
 
 telegram:
   allowed_user_ids: []            # ADD YOUR TELEGRAM USER ID HERE
-  token_env: COPILOT_AGENT_TELEGRAM_TOKEN
+  token_env: TELEGRAM_BOT_TOKEN
 
 session:
   history_dir: sessions
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   1. Edit ${path.join(configDir, 'config.yaml')}
      → Add your Telegram user ID to telegram.allowed_user_ids
   2. Add your Telegram bot token to ${path.join(configDir, '.env')}
-     → Set COPILOT_AGENT_TELEGRAM_TOKEN=...
+     → Set TELEGRAM_BOT_TOKEN=...
   3. Run: node dist/index.js provider add github-copilot
   4. Start the bot: npm start
 \n`);

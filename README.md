@@ -82,7 +82,7 @@ agents:
 
 telegram:
   allowed_user_ids: [123456789]   # your Telegram user ID
-  token_env: COPILOT_AGENT_TELEGRAM_TOKEN
+  token_env: TELEGRAM_BOT_TOKEN
 
 session:
   history_dir: sessions
@@ -131,7 +131,7 @@ Set API tokens in `<configDir>/.env` or export them directly.
 
 | Variable                          | Purpose                     |
 | --------------------------------- | --------------------------- |
-| `COPILOT_AGENT_TELEGRAM_TOKEN`    | Telegram bot token          |
+| `TELEGRAM_BOT_TOKEN`              | Telegram bot token          |
 | `COPILOT_AGENT_CONFIG_DIR`        | Override config directory   |
 | `GITHUB_TOKEN`                    | GitHub API token            |
 | `OPENAI_API_KEY`                  | OpenAI API key              |

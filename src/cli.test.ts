@@ -646,7 +646,7 @@ describe('runCli', () => {
       vi.mocked(loadConfig).mockResolvedValue({
         active: { preset: 'gh', model: 'm1' },
         agents: { dir: 'agents', default: 'assistant' },
-        telegram: { allowed_user_ids: [123], token_env: 'COPILOT_AGENT_TELEGRAM_TOKEN' },
+        telegram: { allowed_user_ids: [123], token_env: 'TELEGRAM_BOT_TOKEN' },
         session: { history_dir: 'sessions', max_messages: 50, max_idle_seconds: 1800 },
         permissions: { mode: 'readonly-default', timeout_seconds: 60 },
         channels: { enabled: ['telegram'] },

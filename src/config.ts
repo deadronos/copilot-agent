@@ -60,7 +60,7 @@ const ConfigSchema = z
     telegram: z
       .object({
         allowed_user_ids: z.array(z.number()),
-        token_env: z.string().default('COPILOT_AGENT_TELEGRAM_TOKEN'),
+        token_env: z.string().default('TELEGRAM_BOT_TOKEN'),
       })
       .strict(),
 
@@ -196,7 +196,7 @@ export async function listPresets(configDir: string): Promise<string[]> {
 // ── Secrets resolution ─────────────────────────────────────────────
 
 const SECRET_ENV_VARS = [
-  'COPILOT_AGENT_TELEGRAM_TOKEN',
+  'TELEGRAM_BOT_TOKEN',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'GITHUB_TOKEN',
